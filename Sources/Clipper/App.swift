@@ -603,7 +603,8 @@ private enum MenuBarIcon {
 
     static func state(recording: Bool, status: String) -> State {
         if recording { return .recording }
-        return status == "Ready" || status == "Stopped" ? .idle : .warning
+        if status == "Ready" || status == "Stopped" { return .idle }
+        return .warning
     }
 
     static func menuBarImage(_ state: State) -> NSImage {

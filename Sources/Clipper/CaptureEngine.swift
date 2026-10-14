@@ -315,6 +315,7 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
     private let onFailure: (Error) -> Void
     private let failureLock = NSLock()
     private var failureReported = false
+    private var stopping = false
     private var loggedFirstFrame = false
 
     init(width: Int, height: Int, fps: Int, duration: Int, memoryLimitMB: Int,
@@ -478,6 +479,10 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        failureLock.lock()
+        let intentionallyStopped = stopping
+        failureLock.unlock()
+        guard !intentionallyStopped else { return }
         reportFailure(error)
     }
 
@@ -490,6 +495,9 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
     }
 
     func finish() {
+        failureLock.lock()
+        stopping = true
+        failureLock.unlock()
         guard let encoder else { return }
         VTCompressionSessionCompleteFrames(encoder, untilPresentationTimeStamp: .invalid)
         VTCompressionSessionInvalidate(encoder)
@@ -695,9 +703,11 @@ final class CaptureEngine: ObservableObject {
     func stop() async {
         if let startTask { await startTask.value }
         guard let stream, let pipeline else { return }
+        // ScreenCaptureKit reports a stop as a delegate error on some macOS versions.
+        // Mark this stop first so that normal pause/resume stays in the idle state.
+        pipeline.finish()
         if let audioStream { try? await audioStream.stopCapture() }
         do { try await stream.stopCapture() } catch { status = error.localizedDescription }
-        pipeline.finish()
         self.stream = nil
         self.audioStream = nil
         self.pipeline = nil
