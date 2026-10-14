@@ -21,6 +21,7 @@ struct AudioPacket {
 struct ClipSnapshot {
     let video: [VideoPacket]
     let audio: [AudioPacket]
+    let microphone: [AudioPacket]
     let duration: Double
     let endTime: CMTime
 }
@@ -30,8 +31,11 @@ final class RollingBuffer {
     private let lock = NSLock()
     private var video: [VideoPacket] = []
     private var audio: [AudioPacket] = []
+    private var microphone: [AudioPacket] = []
     private var audioHead = 0
     private var staleAudioBytes = 0
+    private var microphoneHead = 0
+    private var staleMicrophoneBytes = 0
     private var totalBytes = 0
     private let seconds: Double
     private let maxBytes: Int
@@ -53,19 +57,58 @@ final class RollingBuffer {
         lock.unlock()
     }
 
-    func addAudio(_ sample: CMSampleBuffer) -> Bool {
+    func addAudio(_ sample: CMSampleBuffer, microphone isMicrophone: Bool = false) -> Bool {
         // ScreenCaptureKit reuses audio buffers. Retaining its CMSampleBuffer stalls capture
         // after the small framework pool fills, so copy the PCM bytes before buffering.
-        guard let source = CMSampleBufferGetDataBuffer(sample),
-              let format = CMSampleBufferGetFormatDescription(sample) else { return false }
-        let length = CMBlockBufferGetDataLength(source)
+        guard let format = CMSampleBufferGetFormatDescription(sample) else { return false }
+        let source = CMSampleBufferGetDataBuffer(sample)
+        let copiedPCM: AVAudioPCMBuffer?
+        if source == nil {
+            let audioFormat = AVAudioFormat(cmAudioFormatDescription: format)
+            let frames = CMSampleBufferGetNumSamples(sample)
+            guard frames > 0,
+                  let pcm = AVAudioPCMBuffer(pcmFormat: audioFormat,
+                                             frameCapacity: AVAudioFrameCount(frames)) else { return false }
+            pcm.frameLength = AVAudioFrameCount(frames)
+            guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: 0,
+                                                                frameCount: Int32(frames),
+                                                                into: pcm.mutableAudioBufferList) == noErr else { return false }
+            copiedPCM = pcm
+        } else {
+            copiedPCM = nil
+        }
+        let pcmBuffers = copiedPCM?.audioBufferList
+        let length = source.map(CMBlockBufferGetDataLength) ?? pcmBuffers.map { list in
+            UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list)).reduce(0) {
+                $0 + Int($1.mDataByteSize)
+            }
+        } ?? 0
+        guard length > 0 else { return false }
         var data: CMBlockBuffer?
-        guard CMBlockBufferCreateContiguous(allocator: kCFAllocatorDefault, sourceBuffer: source,
-                                            blockAllocator: kCFAllocatorDefault, customBlockSource: nil,
-                                            offsetToData: 0, dataLength: length,
-                                            flags: UInt32(kCMBlockBufferAlwaysCopyDataFlag),
-                                            blockBufferOut: &data) == noErr,
-              let data else { return false }
+        if let source {
+            guard CMBlockBufferCreateContiguous(allocator: kCFAllocatorDefault, sourceBuffer: source,
+                                                blockAllocator: kCFAllocatorDefault, customBlockSource: nil,
+                                                offsetToData: 0, dataLength: length,
+                                                flags: UInt32(kCMBlockBufferAlwaysCopyDataFlag),
+                                                blockBufferOut: &data) == noErr else { return false }
+        } else if let pcmBuffers {
+            guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil,
+                                                      blockLength: length, blockAllocator: kCFAllocatorDefault,
+                                                      customBlockSource: nil, offsetToData: 0,
+                                                      dataLength: length, flags: 0,
+                                                      blockBufferOut: &data) == noErr,
+                  let data else { return false }
+            var offset = 0
+            for audioBuffer in UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: pcmBuffers)) {
+                let count = Int(audioBuffer.mDataByteSize)
+                guard let bytes = audioBuffer.mData,
+                      CMBlockBufferReplaceDataBytes(with: bytes, blockBuffer: data,
+                                                    offsetIntoDestination: offset,
+                                                    dataLength: count) == noErr else { return false }
+                offset += count
+            }
+        }
+        guard let data else { return false }
         var timing = CMSampleTimingInfo()
         guard CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing) == noErr else { return false }
         var owned: CMSampleBuffer?
@@ -86,7 +129,7 @@ final class RollingBuffer {
               let owned else { return false }
         let packet = AudioPacket(sample: owned, time: CMSampleBufferGetPresentationTimeStamp(owned), bytes: length)
         lock.lock()
-        audio.append(packet)
+        if isMicrophone { microphone.append(packet) } else { audio.append(packet) }
         totalBytes += packet.bytes
         trim()
         lock.unlock()
@@ -96,6 +139,9 @@ final class RollingBuffer {
     private func trim() {
         if let newestAudio = audio.last {
             discardAudio(olderThan: newestAudio.time.seconds - seconds)
+        }
+        if let newestMicrophone = microphone.last {
+            discardMicrophone(olderThan: newestMicrophone.time.seconds - seconds)
         }
         if let newestVideo = video.last {
             let cutoff = newestVideo.time.seconds - seconds
@@ -110,9 +156,15 @@ final class RollingBuffer {
         }
         if let firstTime = video.first?.time.seconds {
             discardAudio(olderThan: firstTime)
+            discardMicrophone(olderThan: firstTime)
         }
-        while totalBytes > maxBytes, audioHead < audio.count {
-            discardOldestAudio()
+        while totalBytes > maxBytes && (audioHead < audio.count || microphoneHead < microphone.count) {
+            if audioHead < audio.count &&
+                (microphoneHead == microphone.count || audio[audioHead].time <= microphone[microphoneHead].time) {
+                discardOldestAudio()
+            } else {
+                discardOldestMicrophone()
+            }
         }
         if totalBytes > maxBytes {
             totalBytes -= video.reduce(0) { $0 + $1.bytes }
@@ -124,6 +176,11 @@ final class RollingBuffer {
             audio.removeFirst(audioHead)
             audioHead = 0
             staleAudioBytes = 0
+        }
+        if microphoneHead > 0 && (microphoneHead * 2 >= microphone.count || staleMicrophoneBytes >= 8 * 1_048_576) {
+            microphone.removeFirst(microphoneHead)
+            microphoneHead = 0
+            staleMicrophoneBytes = 0
         }
     }
 
@@ -138,6 +195,19 @@ final class RollingBuffer {
         totalBytes -= bytes
         staleAudioBytes += bytes
         audioHead += 1
+    }
+
+    private func discardMicrophone(olderThan cutoff: Double) {
+        while microphoneHead < microphone.count && microphone[microphoneHead].time.seconds < cutoff {
+            discardOldestMicrophone()
+        }
+    }
+
+    private func discardOldestMicrophone() {
+        let bytes = microphone[microphoneHead].bytes
+        totalBytes -= bytes
+        staleMicrophoneBytes += bytes
+        microphoneHead += 1
     }
 
     private func discardVideo(_ count: Int) {
@@ -167,7 +237,9 @@ final class RollingBuffer {
             guard result == noErr, let held else { throw CaptureError.writer("Could not hold the last frame") }
             let still = VideoPacket(sample: held, time: startTime, bytes: keyframe.bytes, isKeyframe: true)
             let recentAudio = audio[audioHead...].filter { $0.time.seconds >= wanted && $0.time.seconds <= now.seconds }
-            return ClipSnapshot(video: [still], audio: recentAudio, duration: Double(seconds), endTime: now)
+            let recentMic = microphone[microphoneHead...].filter { $0.time.seconds >= wanted && $0.time.seconds <= now.seconds }
+            return ClipSnapshot(video: [still], audio: recentAudio, microphone: recentMic,
+                                duration: Double(seconds), endTime: now)
         }
         let start = video.indices.last(where: { video[$0].isKeyframe && video[$0].time.seconds <= wanted })
             ?? video.firstIndex(where: \.isKeyframe)
@@ -190,7 +262,9 @@ final class RollingBuffer {
                                                        bytes: last.bytes, isKeyframe: last.isKeyframe)
         }
         let audioSamples = audio[audioHead...].filter { $0.time.seconds >= firstTime && $0.time.seconds <= now.seconds }
-        return ClipSnapshot(video: selected, audio: audioSamples, duration: now.seconds - firstTime, endTime: now)
+        let microphoneSamples = microphone[microphoneHead...].filter { $0.time.seconds >= firstTime && $0.time.seconds <= now.seconds }
+        return ClipSnapshot(video: selected, audio: audioSamples, microphone: microphoneSamples,
+                            duration: now.seconds - firstTime, endTime: now)
     }
 }
 
@@ -200,6 +274,7 @@ private enum CaptureError: LocalizedError {
     case encoderProperty(OSStatus)
     case writer(String)
     case permission
+    case microphonePermission
     case noDisplay
     case audioCopy
     case pixelTransfer(OSStatus)
@@ -214,8 +289,9 @@ private enum CaptureError: LocalizedError {
         case .encoderProperty(let code): "Could not configure the video encoder (\(code))."
         case .writer(let detail): "Could not save the clip: \(detail)"
         case .permission: "Allow Screen Recording in System Settings, then restart this app."
+        case .microphonePermission: "Allow Microphone access for Snip in System Settings."
         case .noDisplay: "No display is available for capture."
-        case .audioCopy: "Could not copy a system audio sample."
+        case .audioCopy: "Could not copy an audio sample."
         case .pixelTransfer(let code): "Could not resize a captured frame (\(code))."
         case .colorBuffer(let code): "Could not prepare a color-edited frame (\(code))."
         case .noSelectedApps(let kind): "Choose at least one app for \(kind), or select All apps."
@@ -394,6 +470,8 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
             if result != noErr { reportFailure(CaptureError.hardwareEncoder(result)) }
         case .audio:
             if !buffer.addAudio(sampleBuffer) { reportFailure(CaptureError.audioCopy) }
+        case .microphone:
+            if !buffer.addAudio(sampleBuffer, microphone: true) { reportFailure(CaptureError.audioCopy) }
         default:
             break
         }
@@ -498,6 +576,13 @@ final class CaptureEngine: ObservableObject {
                 status = "Screen Recording permission required"
                 throw CaptureError.permission
             }
+            if settings.recordMicrophone {
+                let allowed = await AVCaptureDevice.requestAccess(for: .audio)
+                guard allowed else {
+                    status = "Microphone permission required"
+                    throw CaptureError.microphonePermission
+                }
+            }
             let content = try await SCShareableContent.current
             availableDisplays = content.displays
             availableApplications = content.applications
@@ -540,6 +625,7 @@ final class CaptureEngine: ObservableObject {
             configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
             configuration.showsCursor = true
             configuration.capturesAudio = settings.includeAudio && sharedAudioFilter
+            configuration.captureMicrophone = settings.recordMicrophone
             configuration.excludesCurrentProcessAudio = settings.excludeAppAudio
             configuration.sampleRate = 48_000
             configuration.channelCount = 2
@@ -564,6 +650,9 @@ final class CaptureEngine: ObservableObject {
             try stream.addStreamOutput(pipeline, type: .screen, sampleHandlerQueue: videoQueue)
             if settings.includeAudio && sharedAudioFilter {
                 try stream.addStreamOutput(pipeline, type: .audio, sampleHandlerQueue: audioQueue)
+            }
+            if settings.recordMicrophone {
+                try stream.addStreamOutput(pipeline, type: .microphone, sampleHandlerQueue: audioQueue)
             }
             var separateAudioStream: SCStream?
             if settings.includeAudio && !sharedAudioFilter {
@@ -685,8 +774,12 @@ private enum ClipExporter {
         videoInput.expectsMediaDataInRealTime = false
         writer.add(videoInput)
 
+        let mixer = clip.microphone.isEmpty ? nil : try AudioMixer(system: clip.audio,
+                                                                   microphone: clip.microphone,
+                                                                   start: clip.video[0].time,
+                                                                   end: clip.endTime)
         var audioInput: AVAssetWriterInput?
-        if !clip.audio.isEmpty {
+        if !clip.audio.isEmpty || !clip.microphone.isEmpty {
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: 48_000,
@@ -704,9 +797,11 @@ private enum ClipExporter {
 
         var videoIndex = 0
         var audioIndex = 0
+        var mixedSample: CMSampleBuffer?
+        var mixerDone = false
         var videoFinished = false
         var audioFinished = audioInput == nil
-        while videoIndex < clip.video.count || audioIndex < clip.audio.count {
+        while !videoFinished || !audioFinished {
             if writer.status == .failed {
                 throw CaptureError.writer(writer.error?.localizedDescription ?? "Writer failed")
             }
@@ -718,18 +813,33 @@ private enum ClipExporter {
                 videoIndex += 1
                 appended = true
             }
-            if let audioInput, audioIndex < clip.audio.count, audioInput.isReadyForMoreMediaData {
-                guard audioInput.append(clip.audio[audioIndex].sample) else {
-                    throw CaptureError.writer(writer.error?.localizedDescription ?? "Could not append audio")
+            if let audioInput, audioInput.isReadyForMoreMediaData {
+                if let mixer {
+                    if mixedSample == nil && !mixerDone {
+                        mixedSample = try mixer.nextSample()
+                        mixerDone = mixedSample == nil
+                    }
+                    if let mixedSample {
+                        guard audioInput.append(mixedSample) else {
+                            throw CaptureError.writer(writer.error?.localizedDescription ?? "Could not append mixed audio")
+                        }
+                        audioIndex += 1
+                        appended = true
+                    }
+                    mixedSample = nil
+                } else if audioIndex < clip.audio.count {
+                    guard audioInput.append(clip.audio[audioIndex].sample) else {
+                        throw CaptureError.writer(writer.error?.localizedDescription ?? "Could not append audio")
+                    }
+                    audioIndex += 1
+                    appended = true
                 }
-                audioIndex += 1
-                appended = true
             }
             if !videoFinished && videoIndex == clip.video.count {
                 videoInput.markAsFinished()
                 videoFinished = true
             }
-            if !audioFinished && audioIndex == clip.audio.count {
+            if !audioFinished && (mixer == nil ? audioIndex == clip.audio.count : mixerDone) {
                 audioInput?.markAsFinished()
                 audioFinished = true
             }

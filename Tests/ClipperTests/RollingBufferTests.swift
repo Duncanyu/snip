@@ -92,6 +92,7 @@ final class RollingBufferTests: XCTestCase {
         XCTAssertFalse(settings.showInDock)
         XCTAssertEqual(settings.bitrateMbps, 0)
         XCTAssertTrue(settings.excludeAppAudio)
+        XCTAssertFalse(settings.recordMicrophone)
         XCTAssertEqual(settings.videoAppMode, .all)
         XCTAssertEqual(settings.audioAppMode, .all)
         XCTAssertFalse(settings.hasColorEdit)
@@ -104,6 +105,9 @@ final class RollingBufferTests: XCTestCase {
         edited.bitrateMbps = 50
         XCTAssertTrue(edited.needsCaptureRestart(comparedTo: settings))
         edited = settings
+        edited.recordMicrophone = true
+        XCTAssertTrue(edited.needsCaptureRestart(comparedTo: settings))
+        edited = settings
         edited.excludeAppAudio = false
         XCTAssertFalse(try JSONDecoder().decode(CaptureSettings.self,
                                                from: JSONEncoder().encode(edited)).excludeAppAudio)
@@ -112,6 +116,45 @@ final class RollingBufferTests: XCTestCase {
         XCTAssertEqual(edited.normalized().bitrateMbps, 200)
         edited.bitrateMbps = -1
         XCTAssertEqual(edited.normalized().bitrateMbps, 0)
+    }
+
+    func testMicrophoneMixProducesOneAudibleStereoSample() throws {
+        let start = CMTime(seconds: 10, preferredTimescale: 48_000)
+        let packet = try pcmSample(at: 10, bytes: 9_600)
+        let audio = AudioPacket(sample: packet, time: start, bytes: 9_600)
+        let mixer = try AudioMixer(system: [audio], microphone: [audio], start: start,
+                                   end: CMTime(seconds: 10.1, preferredTimescale: 48_000))
+        let mixed = try XCTUnwrap(mixer.nextSample())
+        XCTAssertEqual(CMSampleBufferGetNumSamples(mixed), 4096)
+        let block = try XCTUnwrap(CMSampleBufferGetDataBuffer(mixed))
+        var first = [Float](repeating: 0, count: 2)
+        let copied = first.withUnsafeMutableBytes {
+            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: 8,
+                                       destination: $0.baseAddress!)
+        }
+        XCTAssertEqual(copied, noErr)
+        XCTAssertGreaterThan(first[0], 0.5)
+        XCTAssertEqual(first[0], first[1], accuracy: 0.02)
+        XCTAssertEqual(CMSampleBufferGetNumSamples(try XCTUnwrap(mixer.nextSample())), 704)
+        XCTAssertNil(try mixer.nextSample())
+    }
+
+    func testSystemAndMicrophoneShareRollingMemoryCap() throws {
+        let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        let buffer = RollingBuffer(seconds: 30, maxBytes: 5_000)
+        buffer.addVideo(try sample(at: now - 1, keyframe: true))
+        for index in 0..<80 {
+            let packet = try pcmSample(at: now - 0.8 + Double(index) / 100)
+            XCTAssertTrue(buffer.addAudio(packet))
+            XCTAssertTrue(buffer.addAudio(packet, microphone: true))
+        }
+        let clip = try buffer.snapshot(seconds: 1)
+        XCTAssertFalse(clip.audio.isEmpty)
+        XCTAssertFalse(clip.microphone.isEmpty)
+        let bytes = clip.video.reduce(0) { $0 + $1.bytes } +
+            clip.audio.reduce(0) { $0 + $1.bytes } +
+            clip.microphone.reduce(0) { $0 + $1.bytes }
+        XCTAssertLessThanOrEqual(bytes, 5_000)
     }
 
     func testSourceRulesAndColorSettingsPersist() throws {

@@ -2,20 +2,24 @@
 
 **Save the last moments of your screen with one shortcut.** Snip is a native macOS recorder that keeps recent video in a compressed rolling buffer, then writes a `.mov` clip when you ask for it.
 
-![Screen and audio flow through hardware HEVC into a compressed rolling buffer, then become a clip on a shortcut](docs/how-it-works.svg)
+```text
+Screen → hardware HEVC → compressed rolling buffer ─┐
+App sound ────────────────────────────────────────────┼→ shortcut → .mov clip
+Microphone (optional) ────────────────────────────────┘
+```
 
-**[Download the Apple Silicon preview](https://github.com/Duncanyu/clipper/releases/tag/v0.1.1-preview)** · [Install](#download-and-install) · [Features](#use) · [Measured performance](#measured-performance-and-quality)
+**[Download the Apple Silicon preview](https://github.com/Duncanyu/clipper/releases/tag/v0.1.2-preview)** · [Install](#download-and-install) · [Features](#use) · [Measured performance](#measured-performance-and-quality)
 
 ## Download and install
 
-Download **Snip-v0.1.1-preview-macos-arm64.zip** from the [0.1.1 preview release](https://github.com/Duncanyu/clipper/releases/tag/v0.1.1-preview). It requires an Apple Silicon Mac running macOS 15 or later.
+Download **Snip-v0.1.2-preview-macos-arm64.zip** from the [0.1.2 preview release](https://github.com/Duncanyu/clipper/releases/tag/v0.1.2-preview). It requires an Apple Silicon Mac running macOS 15 or later.
 
 1. Unzip the download and drag **Snip.app** into **Applications**.
 2. Open Snip from Applications. This preview is ad hoc signed and is **not notarized**. If macOS blocks the first launch, try opening it once, then go to **System Settings → Privacy & Security → Open Anyway** and confirm. See [Apple's instructions](https://support.apple.com/en-us/102445). Only bypass this warning for a copy you downloaded from this repository.
 3. Allow **Screen & System Audio Recording** when macOS asks. If you change this permission in System Settings, quit and reopen Snip.
 4. Snip appears in the menu bar while capture is active. Choose **Settings** there to select a display, clip length, quality, shortcuts, and save folder. If the menu bar icon is hidden, open Snip from the Dock to show Settings.
 
-The release includes a SHA-256 checksum file. Place it beside the ZIP and run `shasum -a 256 -c Snip-v0.1.1-preview-macos-arm64.zip.sha256` to verify the download.
+The release includes a SHA-256 checksum file. Place it beside the ZIP and run `shasum -a 256 -c Snip-v0.1.2-preview-macos-arm64.zip.sha256` to verify the download.
 
 ## Use
 
@@ -23,14 +27,23 @@ The release includes a SHA-256 checksum file. Place it beside the ZIP and run `s
 - Choose 30, 60, or 120 FPS. Snip caps capture at the selected display's refresh rate; a 120 FPS choice on a 60 Hz display captures up to 60 FPS.
 - **Retina** uses the captured display's full pixel resolution. Half, normal, and custom output sizes are also available. A custom size above the source size is upscaled.
 - Choose a quality preset or set bitrate from Auto (0) to 200 Mbps. Higher bitrates consume more of the rolling buffer, so the available history may be shorter than the requested clip length.
-- In **Sources**, record all apps, only selected apps, or all except selected apps. Video and system audio have separate rules. You can also exclude Snip's save sound from clips.
+- In **Sources**, turn app sound and microphone recording on or off independently. The microphone is off by default and asks for macOS Microphone permission when enabled. App rules govern video and app sound; they do not filter the microphone. You can also exclude Snip's save sound from clips.
 - In **Color**, adjust brightness, contrast, and saturation of the recorded video. Neutral values preserve the original capture colors.
 
 ## Measured performance and quality
 
-![Two comparisons of Snip CPU use and a full resolution clip quality check](docs/performance.svg)
+Each `█` shows about 1 percentage point of median CPU on one logical CPU; exact values follow.
 
-On an **Apple M4 with 16 GiB RAM and macOS 27.0.1**, using **2940 × 1912 Retina output**, a 16 Mbps target, system audio, and a 60 Hz display:
+| Observation | CPU graph |
+| --- | --- |
+| Stationary, before refresh cap | `█████████████████████` 21.0% |
+| Stationary, with refresh cap | `█████` 5.1% |
+| Stationary, after audio trim change | `████` 4.15% |
+| Moving tiles, before audio trim change | `█████` 5.3% |
+| Moving tiles, after audio trim change | `████` 4.1% |
+| Paused | `·` 0.0% |
+
+On an **Apple M4 with 16 GiB RAM and macOS 27.0.1**, using **2940 × 1912 Retina output**, a 16 Mbps target, system audio, microphone off, and a 60 Hz display:
 
 | 30-second observation | Median CPU¹ | 95th percentile CPU¹ | Median memory (RSS) |
 | --- | ---: | ---: | ---: |

@@ -81,6 +81,7 @@ struct CaptureSettings: Codable, Equatable {
     var memoryLimitMB = 1024
     var displayID: CGDirectDisplayID?
     var includeAudio = true
+    var recordMicrophone = false
     var excludeAppAudio = true
     var videoAppMode: AppSourceMode = .all
     var videoAppIDs: [String] = []
@@ -114,7 +115,7 @@ struct CaptureSettings: Codable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case clipDuration, fps, resolution, memoryLimitMB, displayID, includeAudio, excludeAppAudio
+        case clipDuration, fps, resolution, memoryLimitMB, displayID, includeAudio, recordMicrophone, excludeAppAudio
         case videoAppMode, videoAppIDs, audioAppMode, audioAppIDs
         case showInMenuBar, menuBarPreferenceInitialized
         case customWidth, customHeight, bitrateMbps, brightness, contrast, saturation
@@ -136,6 +137,7 @@ struct CaptureSettings: Codable, Equatable {
         memoryLimitMB = try values.decodeIfPresent(Int.self, forKey: .memoryLimitMB) ?? memoryLimitMB
         displayID = try values.decodeIfPresent(CGDirectDisplayID.self, forKey: .displayID)
         includeAudio = try values.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? includeAudio
+        recordMicrophone = try values.decodeIfPresent(Bool.self, forKey: .recordMicrophone) ?? recordMicrophone
         excludeAppAudio = try values.decodeIfPresent(Bool.self, forKey: .excludeAppAudio) ?? excludeAppAudio
         videoAppMode = try values.decodeIfPresent(AppSourceMode.self, forKey: .videoAppMode) ?? videoAppMode
         videoAppIDs = try values.decodeIfPresent([String].self, forKey: .videoAppIDs) ?? videoAppIDs
@@ -229,6 +231,7 @@ struct CaptureSettings: Codable, Equatable {
         return displayID != other.displayID || fps != other.fps || resolution != other.resolution ||
         customSizeChanged || bitrateMbps != other.bitrateMbps || clipDuration != other.clipDuration ||
         memoryLimitMB != other.memoryLimitMB || includeAudio != other.includeAudio ||
+        recordMicrophone != other.recordMicrophone ||
         excludeAppAudio != other.excludeAppAudio || videoAppMode != other.videoAppMode ||
         videoAppIDs != other.videoAppIDs || audioAppMode != other.audioAppMode ||
         audioAppIDs != other.audioAppIDs || brightness != other.brightness ||
@@ -783,9 +786,14 @@ private struct CaptureSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 sourceRule("Video apps", mode: $store.settings.videoAppMode, ids: $store.settings.videoAppIDs)
-                GroupBox("Sound") {
+                GroupBox("Audio sources") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Record system audio", isOn: $store.settings.includeAudio)
+                        Toggle("Record sound from apps", isOn: $store.settings.includeAudio)
+                        Toggle("Record microphone", isOn: $store.settings.recordMicrophone)
+                        if store.settings.recordMicrophone {
+                            Text("Input: " + (AVCaptureDevice.default(for: .audio)?.localizedName ?? "Default microphone"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         Toggle("Exclude Snip's save sound from clips", isOn: $store.settings.excludeAppAudio)
                             .disabled(!store.settings.includeAudio)
                     }
@@ -793,6 +801,8 @@ private struct CaptureSettingsView: View {
                 }
                 sourceRule("Sound from apps", mode: $store.settings.audioAppMode, ids: $store.settings.audioAppIDs)
                     .disabled(!store.settings.includeAudio)
+                Text("App sound rules do not affect the microphone.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("App rules update as apps open and close. An Only rule needs a capturable app window.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -915,7 +925,8 @@ private struct CaptureSettingsView: View {
     private var draftSummary: String {
         let s = store.settings
         let bitrate = s.bitrateMbps == 0 ? "Auto" : String(s.bitrateMbps) + " Mbps"
-        let audio = s.includeAudio ? s.audioAppMode.title : "Off"
+        let audio = (s.includeAudio ? "Apps " + s.audioAppMode.title : "Apps off") +
+            (s.recordMicrophone ? ", mic on" : ", mic off")
         let color = s.hasColorEdit ? "Color edited" : "Original color"
         let resolution = s.resolution == .custom
             ? String(s.customWidth) + "×" + String(s.customHeight)
