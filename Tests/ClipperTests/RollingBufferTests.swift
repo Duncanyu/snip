@@ -69,6 +69,9 @@ final class RollingBufferTests: XCTestCase {
         XCTAssertFalse(settings.showInDock)
         XCTAssertEqual(settings.bitrateMbps, 0)
         XCTAssertTrue(settings.excludeAppAudio)
+        XCTAssertEqual(settings.videoAppMode, .all)
+        XCTAssertEqual(settings.audioAppMode, .all)
+        XCTAssertFalse(settings.hasColorEdit)
         XCTAssertEqual(settings.hotkeyLabel, "⌘⇧9")
         XCTAssertEqual(settings.pauseHotkeyLabel, "⌘⌥P")
         var edited = settings
@@ -86,6 +89,32 @@ final class RollingBufferTests: XCTestCase {
         XCTAssertEqual(edited.normalized().bitrateMbps, 200)
         edited.bitrateMbps = -1
         XCTAssertEqual(edited.normalized().bitrateMbps, 0)
+    }
+
+    func testSourceRulesAndColorSettingsPersist() throws {
+        var settings = CaptureSettings()
+        settings.videoAppMode = .only
+        settings.videoAppIDs = ["com.example.game", "com.example.game", "com.example.chat"]
+        settings.audioAppMode = .exclude
+        settings.audioAppIDs = ["com.example.chat"]
+        settings.brightness = 0.1
+        settings.contrast = 1.2
+        settings.saturation = 0.8
+        let restored = try JSONDecoder().decode(CaptureSettings.self,
+                                                from: JSONEncoder().encode(settings.normalized()))
+        XCTAssertEqual(restored.videoAppIDs, ["com.example.chat", "com.example.game"])
+        XCTAssertEqual(restored.audioAppMode, .exclude)
+        XCTAssertEqual(restored.audioAppIDs, ["com.example.chat"])
+        XCTAssertTrue(restored.hasColorEdit)
+        XCTAssertTrue(restored.needsCaptureRestart(comparedTo: CaptureSettings()))
+
+        settings.brightness = .infinity
+        settings.contrast = 5
+        settings.saturation = -1
+        let safe = settings.normalized()
+        XCTAssertEqual(safe.brightness, 0)
+        XCTAssertEqual(safe.contrast, 1.5)
+        XCTAssertEqual(safe.saturation, 0)
     }
 
     private func sample(at seconds: Double, keyframe: Bool, bytes: Int = 100) throws -> CMSampleBuffer {

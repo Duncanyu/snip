@@ -3,6 +3,7 @@ import Carbon
 import Combine
 import ScreenCaptureKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum CaptureResolution: String, Codable, CaseIterable, Identifiable {
     case half, normal, retina, custom
@@ -18,6 +19,19 @@ enum CaptureResolution: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+}
+
+enum AppSourceMode: String, Codable, CaseIterable, Identifiable {
+    case all, only, exclude
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: "All apps"
+        case .only: "Only selected apps"
+        case .exclude: "All except selected apps"
+        }
+    }
 }
 
 private enum QualityPreset: String, CaseIterable, Identifiable {
@@ -68,6 +82,10 @@ struct CaptureSettings: Codable, Equatable {
     var displayID: CGDirectDisplayID?
     var includeAudio = true
     var excludeAppAudio = true
+    var videoAppMode: AppSourceMode = .all
+    var videoAppIDs: [String] = []
+    var audioAppMode: AppSourceMode = .all
+    var audioAppIDs: [String] = []
     var showInMenuBar = true
     var menuBarPreferenceInitialized = false
     // Compatibility for settings data and older callers.
@@ -78,6 +96,9 @@ struct CaptureSettings: Codable, Equatable {
     var customWidth = 2560
     var customHeight = 1440
     var bitrateMbps = 0
+    var brightness = 0.0
+    var contrast = 1.0
+    var saturation = 1.0
     var clipName = "Clip"
     var clipDirectoryPath = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Movies/Clips", isDirectory: true).path
@@ -94,8 +115,10 @@ struct CaptureSettings: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case clipDuration, fps, resolution, memoryLimitMB, displayID, includeAudio, excludeAppAudio
+        case videoAppMode, videoAppIDs, audioAppMode, audioAppIDs
         case showInMenuBar, menuBarPreferenceInitialized
-        case customWidth, customHeight, bitrateMbps, clipName, clipDirectoryPath, playSoundOnSave, soundPreferenceInitialized
+        case customWidth, customHeight, bitrateMbps, brightness, contrast, saturation
+        case clipName, clipDirectoryPath, playSoundOnSave, soundPreferenceInitialized
         case hotkeyKeyCode, hotkeyModifiers, hotkeyLabel
         case pauseHotkeyKeyCode, pauseHotkeyModifiers, pauseHotkeyLabel
     }
@@ -114,6 +137,10 @@ struct CaptureSettings: Codable, Equatable {
         displayID = try values.decodeIfPresent(CGDirectDisplayID.self, forKey: .displayID)
         includeAudio = try values.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? includeAudio
         excludeAppAudio = try values.decodeIfPresent(Bool.self, forKey: .excludeAppAudio) ?? excludeAppAudio
+        videoAppMode = try values.decodeIfPresent(AppSourceMode.self, forKey: .videoAppMode) ?? videoAppMode
+        videoAppIDs = try values.decodeIfPresent([String].self, forKey: .videoAppIDs) ?? videoAppIDs
+        audioAppMode = try values.decodeIfPresent(AppSourceMode.self, forKey: .audioAppMode) ?? audioAppMode
+        audioAppIDs = try values.decodeIfPresent([String].self, forKey: .audioAppIDs) ?? audioAppIDs
         if let value = try values.decodeIfPresent(Bool.self, forKey: .showInMenuBar) {
             showInMenuBar = value
         } else {
@@ -126,6 +153,9 @@ struct CaptureSettings: Codable, Equatable {
         customWidth = try values.decodeIfPresent(Int.self, forKey: .customWidth) ?? customWidth
         customHeight = try values.decodeIfPresent(Int.self, forKey: .customHeight) ?? customHeight
         bitrateMbps = try values.decodeIfPresent(Int.self, forKey: .bitrateMbps) ?? bitrateMbps
+        brightness = try values.decodeIfPresent(Double.self, forKey: .brightness) ?? brightness
+        contrast = try values.decodeIfPresent(Double.self, forKey: .contrast) ?? contrast
+        saturation = try values.decodeIfPresent(Double.self, forKey: .saturation) ?? saturation
         clipName = try values.decodeIfPresent(String.self, forKey: .clipName) ?? clipName
         clipDirectoryPath = try values.decodeIfPresent(String.self, forKey: .clipDirectoryPath) ?? clipDirectoryPath
         playSoundOnSave = try values.decodeIfPresent(Bool.self, forKey: .playSoundOnSave) ?? playSoundOnSave
@@ -146,6 +176,11 @@ struct CaptureSettings: Codable, Equatable {
         value.customWidth = min(max(customWidth, 320), 8192) & ~1
         value.customHeight = min(max(customHeight, 180), 8192) & ~1
         value.bitrateMbps = min(max(bitrateMbps, 0), 200)
+        value.brightness = brightness.isFinite ? min(max(brightness, -0.25), 0.25) : 0
+        value.contrast = contrast.isFinite ? min(max(contrast, 0.5), 1.5) : 1
+        value.saturation = saturation.isFinite ? min(max(saturation, 0), 2) : 1
+        value.videoAppIDs = Array(Set(videoAppIDs.filter { !$0.isEmpty })).sorted()
+        value.audioAppIDs = Array(Set(audioAppIDs.filter { !$0.isEmpty })).sorted()
         value.clipName = clipName.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
@@ -184,13 +219,20 @@ struct CaptureSettings: Codable, Equatable {
         return value
     }
 
+    var hasColorEdit: Bool {
+        brightness != 0 || contrast != 1 || saturation != 1
+    }
+
     func needsCaptureRestart(comparedTo other: Self) -> Bool {
         let customSizeChanged = (resolution == .custom || other.resolution == .custom) &&
             (customWidth != other.customWidth || customHeight != other.customHeight)
         return displayID != other.displayID || fps != other.fps || resolution != other.resolution ||
         customSizeChanged || bitrateMbps != other.bitrateMbps || clipDuration != other.clipDuration ||
         memoryLimitMB != other.memoryLimitMB || includeAudio != other.includeAudio ||
-        excludeAppAudio != other.excludeAppAudio
+        excludeAppAudio != other.excludeAppAudio || videoAppMode != other.videoAppMode ||
+        videoAppIDs != other.videoAppIDs || audioAppMode != other.audioAppMode ||
+        audioAppIDs != other.audioAppIDs || brightness != other.brightness ||
+        contrast != other.contrast || saturation != other.saturation
     }
 }
 
@@ -232,15 +274,17 @@ final class CaptureSettingsStore: ObservableObject {
         }
     }
 
-    func apply() async {
+    func apply() async -> Bool {
         settings = settings.normalized()
         if CaptureEngine.shared.isRunning,
            let active = CaptureEngine.shared.activeSettings,
            settings.needsCaptureRestart(comparedTo: active) {
             await CaptureEngine.shared.stop()
             await CaptureEngine.shared.start(settings: settings)
+            if !CaptureEngine.shared.isRunning { return false }
         }
         NSApp.setActivationPolicy(.regular)
+        return true
     }
 }
 
@@ -273,6 +317,12 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
         CaptureEngine.shared.$isRunning.sink { [weak self] _ in self?.updateStatusItem() }.store(in: &observers)
         CaptureEngine.shared.$status.sink { [weak self] _ in self?.updateStatusItem() }.store(in: &observers)
         CaptureSettingsStore.shared.$settings.sink { [weak self] _ in self?.updateStatusItem() }.store(in: &observers)
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.publisher(for: NSWorkspace.didLaunchApplicationNotification)
+            .merge(with: workspace.publisher(for: NSWorkspace.didTerminateApplicationNotification),
+                   workspace.publisher(for: NSWorkspace.didActivateApplicationNotification))
+            .sink { _ in Task { await CaptureEngine.shared.refreshSourceFilters() } }
+            .store(in: &observers)
     }
 
     private func updateStatusItem() {
@@ -336,7 +386,7 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettingsWindow() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 820, height: 820),
+                contentRect: NSRect(x: 0, y: 0, width: 820, height: 660),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false
@@ -582,62 +632,65 @@ private func closeSettingsWindow() {
 }
 
 @MainActor
-private struct CaptureMenu: View {
-    @Environment(\.openSettings) private var openSettings
-    @ObservedObject private var engine = CaptureEngine.shared
-    @ObservedObject private var store = CaptureSettingsStore.shared
-
-    var body: some View {
-        Text(engine.status)
-        Divider()
-        Button("Save Last \(engine.activeSettings?.clipDuration ?? store.settings.clipDuration) Seconds") {
-            Task { await engine.saveClip(seconds: engine.activeSettings?.clipDuration ?? store.settings.clipDuration) }
-        }
-        .disabled(!engine.isRunning)
-        Button(engine.isRunning ? "Pause Capture" : "Start Capture") {
-            Task {
-                if engine.isRunning {
-                    await engine.stop()
-                } else {
-                    await engine.start(settings: store.settings)
-                }
-            }
-        }
-        Divider()
-        Button("Open Clips Folder") {
-            let folder = URL(fileURLWithPath: store.settings.clipDirectoryPath, isDirectory: true)
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(folder)
-        }
-        Button("Settings…") {
-            openSettings()
-            bringSettingsToFront()
-        }
-        Text("Save: \(store.settings.hotkeyLabel)  Pause: \(store.settings.pauseHotkeyLabel)")
-        if let error = store.hotkeyError {
-            Text(error)
-        }
-        Divider()
-        Button("Quit") { NSApp.terminate(nil) }
-    }
-}
-
-@MainActor
 private struct CaptureSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @ObservedObject private var engine = CaptureEngine.shared
     @ObservedObject private var store = CaptureSettingsStore.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Capture settings").font(.title2.bold())
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Snip Settings").font(.title2.bold())
+                    Text(engine.status).font(.caption)
+                        .foregroundStyle(engine.isRunning ? .green : .secondary)
+                }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(draftSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(draftSummary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     Text(store.settings.clipName + " → " + folderLabel)
                         .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    Text(engine.status).font(.caption2).foregroundStyle(engine.isRunning ? .green : .orange)
+                }
+            }
+            TabView {
+                captureTab.tabItem { Label("Video", systemImage: "video") }
+                sourcesTab.tabItem { Label("Sources", systemImage: "square.stack.3d.up") }
+                colorTab.tabItem { Label("Color", systemImage: "slider.horizontal.3") }
+                clipsTab.tabItem { Label("Clips", systemImage: "film") }
+                appTab.tabItem { Label("App", systemImage: "gearshape") }
+            }
+            HStack {
+                if let sourceValidation {
+                    Text(sourceValidation).foregroundStyle(.orange).font(.caption)
+                }
+                Spacer()
+                Button("Apply and Close") {
+                    Task {
+                        if await store.apply() { closeSettingsWindow() }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(sourceValidation != nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 820, height: 660, alignment: .topLeading)
+        .onAppear { bringSettingsToFront() }
+        .task { await engine.refreshDisplays() }
+        .onDisappear { GlobalHotkey.shared.cancelRecording() }
+    }
+
+    private var captureTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GroupBox("Quality preset") {
+                HStack {
+                    Menu(qualityTitle) {
+                        ForEach(QualityPreset.allCases) { preset in
+                            Button(preset.summary) { apply(preset) }
+                        }
+                    }
+                    Spacer()
+                    Text(qualitySelectionSummary).font(.caption).foregroundStyle(.secondary)
                 }
             }
             GroupBox("Capture") {
@@ -666,6 +719,10 @@ private struct CaptureSettingsView: View {
                             .labelsHidden().pickerStyle(.menu)
                         }
                     }
+                    if let displayRefreshFPS, store.settings.fps > displayRefreshFPS {
+                        Text("This display is \(displayRefreshFPS) Hz, so capture runs at up to \(displayRefreshFPS) FPS.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if store.settings.resolution == .custom {
                         HStack(spacing: 14) {
                             setting("Width") { TextField("Pixels", value: $store.settings.customWidth, format: .number) }
@@ -679,19 +736,6 @@ private struct CaptureSettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            GroupBox("Quality preset") {
-                HStack {
-                    Text("FPS and resolution").font(.subheadline.weight(.semibold))
-                    Menu(qualityTitle) {
-                        ForEach(QualityPreset.allCases) { preset in
-                            Button(preset.summary) { apply(preset) }
-                        }
-                    }
-                    .menuStyle(.borderlessButton)
-                    Spacer()
-                    Text(qualitySelectionSummary).font(.caption).foregroundStyle(.secondary)
-                }
-            }
             GroupBox("Bitrate") {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 10) {
@@ -703,6 +747,61 @@ private struct CaptureSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Spacer()
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var colorTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GroupBox("Recorded video color") {
+                VStack(spacing: 7) {
+                    colorControl("Brightness", value: $store.settings.brightness, range: -0.25...0.25)
+                    colorControl("Contrast", value: $store.settings.contrast, range: 0.5...1.5)
+                    colorControl("Saturation", value: $store.settings.saturation, range: 0...2)
+                    HStack {
+                        Text("Neutral values keep the original capture colors.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reset Color") {
+                            store.settings.brightness = 0
+                            store.settings.contrast = 1
+                            store.settings.saturation = 1
+                        }
+                        .disabled(!store.settings.hasColorEdit)
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var sourcesTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                sourceRule("Video apps", mode: $store.settings.videoAppMode, ids: $store.settings.videoAppIDs)
+                GroupBox("Sound") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Record system audio", isOn: $store.settings.includeAudio)
+                        Toggle("Exclude Snip's save sound from clips", isOn: $store.settings.excludeAppAudio)
+                            .disabled(!store.settings.includeAudio)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                sourceRule("Sound from apps", mode: $store.settings.audioAppMode, ids: $store.settings.audioAppIDs)
+                    .disabled(!store.settings.includeAudio)
+                Text("App rules update as apps open and close. An Only rule needs a capturable app window.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(8)
+        }
+    }
+
+    private var clipsTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
             GroupBox("Clip") {
                 VStack(alignment: .leading, spacing: 10) {
                     setting("File name") { TextField("Clip", text: $store.settings.clipName) }
@@ -722,52 +821,128 @@ private struct CaptureSettingsView: View {
                     }
                 }
             }
-            HStack(alignment: .top, spacing: 12) {
-                GroupBox("Audio") {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Toggle("Include system audio", isOn: $store.settings.includeAudio)
-                        Toggle("Exclude snip audio", isOn: $store.settings.excludeAppAudio)
-                            .disabled(!store.settings.includeAudio)
-                        Toggle("Play save sound", isOn: $store.settings.playSoundOnSave)
-                    }
-                }
-                GroupBox("App") {
-                        Toggle("Show in menu bar", isOn: $store.settings.showInMenuBar)
-                }
-            }
-            HStack {
-                Spacer()
-                Button("Apply and Close") {
-                    Task {
-                        await store.apply()
-                        closeSettingsWindow()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-            }
+            Spacer()
         }
-        .padding(20)
-        .frame(width: 820, height: 820, alignment: .topLeading)
-        .onAppear { bringSettingsToFront() }
-        .task { await engine.refreshDisplays() }
-        .onDisappear { GlobalHotkey.shared.cancelRecording() }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var appTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GroupBox("Feedback") {
+                Toggle("Play a sound when a clip is saved", isOn: $store.settings.playSoundOnSave)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            GroupBox("Visibility") {
+                Toggle("Show in menu bar", isOn: $store.settings.showInMenuBar)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer()
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var selectableApps: [SCRunningApplication] {
+        var seen = Set<String>()
+        return engine.availableApplications
+            .filter { !$0.bundleIdentifier.isEmpty && $0.bundleIdentifier != Bundle.main.bundleIdentifier && seen.insert($0.bundleIdentifier).inserted }
+            .sorted { $0.applicationName.localizedCaseInsensitiveCompare($1.applicationName) == .orderedAscending }
+    }
+
+    private var sourceValidation: String? {
+        let s = store.settings
+        if s.videoAppMode == .only && s.videoAppIDs.isEmpty { return "Choose a video app to record." }
+        if s.includeAudio && s.audioAppMode == .only && s.audioAppIDs.isEmpty {
+            return "Choose an app whose sound to record."
+        }
+        return nil
+    }
+
+    private func sourceRule(_ title: String, mode: Binding<AppSourceMode>, ids: Binding<[String]>) -> some View {
+        GroupBox(title) {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Capture", selection: mode) {
+                    ForEach(AppSourceMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if mode.wrappedValue != .all {
+                    if ids.wrappedValue.isEmpty {
+                        Text("No apps selected").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(ids.wrappedValue, id: \.self) { id in
+                        let app = selectableApps.first(where: { $0.bundleIdentifier == id })
+                        let running = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == id }
+                        HStack {
+                            Text(app?.applicationName ?? id)
+                            if app == nil {
+                                Text(running ? "No capturable window" : "Not running")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Remove") { ids.wrappedValue.removeAll { $0 == id } }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                    HStack {
+                        Menu("Add running app") {
+                            let available = selectableApps.filter { !ids.wrappedValue.contains($0.bundleIdentifier) }
+                            if available.isEmpty { Text("No other running apps") }
+                            ForEach(available, id: \.bundleIdentifier) { app in
+                                Button(app.applicationName) { ids.wrappedValue.append(app.bundleIdentifier) }
+                            }
+                        }
+                        Button("Choose app…") { chooseApp(for: ids) }
+                        Button("Refresh") { Task { await engine.refreshDisplays() } }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func chooseApp(for ids: Binding<[String]>) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose an application to add to this rule"
+        guard panel.runModal() == .OK, let url = panel.url,
+              let id = Bundle(url: url)?.bundleIdentifier, !ids.wrappedValue.contains(id) else { return }
+        ids.wrappedValue.append(id)
     }
 
     private var draftSummary: String {
         let s = store.settings
         let bitrate = s.bitrateMbps == 0 ? "Auto" : String(s.bitrateMbps) + " Mbps"
-        let audio = s.includeAudio ? (s.excludeAppAudio ? "system audio, snip excluded" : "system audio") : "no audio"
-        let location = s.showInMenuBar ? "menu bar" : "Dock"
+        let audio = s.includeAudio ? s.audioAppMode.title : "Off"
+        let color = s.hasColorEdit ? "Color edited" : "Original color"
         let resolution = s.resolution == .custom
             ? String(s.customWidth) + "×" + String(s.customHeight)
             : s.resolution.title
         return resolution + " · " + String(s.fps) + " FPS · " + bitrate + " · " +
-            String(s.clipDuration) + "s · " + audio + " · " + location
+            String(s.clipDuration) + "s · " + String(s.memoryLimitMB) + " MB\n" +
+            "Video: " + s.videoAppMode.title + " · Sound: " + audio + " · " + color
     }
 
     private var qualitySelectionSummary: String {
         String(store.settings.fps) + " FPS · " + store.settings.resolution.title
+    }
+
+    private var displayRefreshFPS: Int? {
+        let id = store.settings.displayID ?? CGMainDisplayID()
+        return NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == id
+        }?.maximumFramesPerSecond
+    }
+
+    private func colorControl(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        HStack(spacing: 10) {
+            Text(title).frame(width: 85, alignment: .leading)
+            Slider(value: value, in: range)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .monospacedDigit().frame(width: 42, alignment: .trailing)
+        }
     }
 
     private var folderLabel: String {

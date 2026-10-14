@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreImage
 import CoreMedia
 import ScreenCaptureKit
 import VideoToolbox
@@ -184,6 +185,9 @@ private enum CaptureError: LocalizedError {
     case noDisplay
     case audioCopy
     case pixelTransfer(OSStatus)
+    case colorBuffer(CVReturn)
+    case noSelectedApps(String)
+    case selectedAppsNotRunning(String)
 
     var errorDescription: String? {
         switch self {
@@ -195,6 +199,9 @@ private enum CaptureError: LocalizedError {
         case .noDisplay: "No display is available for capture."
         case .audioCopy: "Could not copy a system audio sample."
         case .pixelTransfer(let code): "Could not resize a captured frame (\(code))."
+        case .colorBuffer(let code): "Could not prepare a color-edited frame (\(code))."
+        case .noSelectedApps(let kind): "Choose at least one app for \(kind), or select All apps."
+        case .selectedAppsNotRunning(let kind): "Open a window in a selected \(kind) app, then start capture."
         }
     }
 }
@@ -206,6 +213,10 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
     private var transfer: VTPixelTransferSession?
     private var transferPool: CVPixelBufferPool?
     private var transferAllocation: CFDictionary?
+    private let colorContext: CIContext?
+    private let colorValues: (brightness: Double, contrast: Double, saturation: Double)?
+    private var colorPool: CVPixelBufferPool?
+    private var colorAllocation: CFDictionary?
     private let onFirstFrame: (Int, Int, Int) -> Void
     private let onFailure: (Error) -> Void
     private let failureLock = NSLock()
@@ -213,7 +224,7 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
     private var loggedFirstFrame = false
 
     init(width: Int, height: Int, fps: Int, duration: Int, memoryLimitMB: Int,
-         bitrateMbps: Int, resizeFromFullResolution: Bool,
+         bitrateMbps: Int, resizeFromFullResolution: Bool, colorSettings: CaptureSettings,
          onFirstFrame: @escaping (Int, Int, Int) -> Void,
          onFailure: @escaping (Error) -> Void) throws {
         buffer = RollingBuffer(seconds: duration, maxBytes: memoryLimitMB * 1_048_576)
@@ -222,6 +233,9 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
         targetBitrate = bitrateMbps > 0 ? min(bitrateMbps, 200) * 1_000_000 : automaticBitrate
         self.onFirstFrame = onFirstFrame
         self.onFailure = onFailure
+        colorContext = colorSettings.hasColorEdit ? CIContext(options: [.useSoftwareRenderer: false]) : nil
+        colorValues = colorSettings.hasColorEdit
+            ? (colorSettings.brightness, colorSettings.contrast, colorSettings.saturation) : nil
         super.init()
 
         if resizeFromFullResolution {
@@ -249,6 +263,24 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
                                                      imageAttributes as CFDictionary, &pool)
             guard poolResult == kCVReturnSuccess, let pool else { throw CaptureError.pixelTransfer(poolResult) }
             transferPool = pool
+        }
+
+        if colorContext != nil {
+            let frameBytes = width * height * 4
+            let poolLimit = max(2, min(3, 192 * 1_048_576 / max(frameBytes, 1)))
+            colorAllocation = [kCVPixelBufferPoolAllocationThresholdKey as String: poolLimit] as CFDictionary
+            let poolAttributes = [kCVPixelBufferPoolMinimumBufferCountKey as String: poolLimit] as CFDictionary
+            let imageAttributes: [String: Any] = [
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+            ]
+            var pool: CVPixelBufferPool?
+            let result = CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttributes,
+                                                 imageAttributes as CFDictionary, &pool)
+            guard result == kCVReturnSuccess, let pool else { throw CaptureError.colorBuffer(result) }
+            colorPool = pool
         }
 
         let encoderOptions = [
@@ -317,6 +349,23 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
                 }
                 frame = resized
             }
+            if let colorContext, let colorValues, let colorPool, let colorAllocation {
+                var output: CVPixelBuffer?
+                let allocation = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+                    kCFAllocatorDefault, colorPool, colorAllocation, &output)
+                if allocation == kCVReturnWouldExceedAllocationThreshold { return }
+                guard allocation == kCVReturnSuccess, let output else {
+                    reportFailure(CaptureError.colorBuffer(allocation))
+                    return
+                }
+                let edited = CIImage(cvPixelBuffer: frame).applyingFilter("CIColorControls", parameters: [
+                    "inputBrightness": colorValues.brightness,
+                    "inputContrast": colorValues.contrast,
+                    "inputSaturation": colorValues.saturation
+                ])
+                colorContext.render(edited, to: output)
+                frame = output
+            }
             let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             var flags = VTEncodeInfoFlags()
             let result = VTCompressionSessionEncodeFrame(encoder, imageBuffer: frame,
@@ -362,9 +411,11 @@ final class CaptureEngine: ObservableObject {
     }
     @Published private(set) var captureDetails = ""
     @Published private(set) var availableDisplays: [SCDisplay] = []
+    @Published private(set) var availableApplications: [SCRunningApplication] = []
     private(set) var activeSettings: CaptureSettings?
 
     private var stream: SCStream?
+    private var audioStream: SCStream?
     private var pipeline: CapturePipeline?
     private var startTask: Task<Void, Never>?
     private var isSaving = false
@@ -375,7 +426,40 @@ final class CaptureEngine: ObservableObject {
 
     func refreshDisplays() async {
         do {
-            availableDisplays = try await SCShareableContent.current.displays
+            let content = try await SCShareableContent.current
+            availableDisplays = content.displays
+            availableApplications = content.applications
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func refreshSourceFilters() async {
+        guard let settings = activeSettings, let stream,
+              settings.videoAppMode != .all || (settings.includeAudio && settings.audioAppMode != .all) else { return }
+        do {
+            let content = try await SCShareableContent.current
+            availableApplications = content.applications
+            guard let display = content.displays.first(where: { $0.displayID == settings.displayID })
+                    ?? content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else { return }
+            if settings.videoAppMode != .all,
+               let filter = try? appFilter(display: display, mode: settings.videoAppMode,
+                                           ids: settings.videoAppIDs, applications: content.applications,
+                                           kind: "video") {
+                try await stream.updateContentFilter(filter)
+            }
+            if settings.includeAudio && settings.audioAppMode != .all {
+                let filter = try? appFilter(display: display, mode: settings.audioAppMode,
+                                            ids: settings.audioAppIDs, applications: content.applications,
+                                            kind: "audio")
+                if let filter {
+                    if let audioStream { try await audioStream.updateContentFilter(filter) }
+                    else if settings.audioAppMode == settings.videoAppMode,
+                            settings.audioAppIDs == settings.videoAppIDs {
+                        try await stream.updateContentFilter(filter)
+                    }
+                }
+            }
         } catch {
             status = error.localizedDescription
         }
@@ -398,10 +482,19 @@ final class CaptureEngine: ObservableObject {
             }
             let content = try await SCShareableContent.current
             availableDisplays = content.displays
+            availableApplications = content.applications
             guard let display = content.displays.first(where: { $0.displayID == settings.displayID })
                     ?? content.displays.first(where: { $0.displayID == CGMainDisplayID() })
                     ?? content.displays.first else { throw CaptureError.noDisplay }
-            let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+            let displayFPS = NSScreen.screens.first {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
+            }?.maximumFramesPerSecond ?? 0
+            let effectiveFPS = displayFPS > 0 ? min(settings.fps, displayFPS) : settings.fps
+            let filter = try appFilter(display: display, mode: settings.videoAppMode,
+                                       ids: settings.videoAppIDs, applications: content.applications,
+                                       kind: "video")
+            let sharedAudioFilter = settings.audioAppMode == settings.videoAppMode &&
+                settings.audioAppIDs == settings.videoAppIDs
             let scale = Double(filter.pointPixelScale)
             let points = filter.contentRect.size
             let nativeWidth = max(2, Int((points.width * scale).rounded()) & ~1)
@@ -424,23 +517,24 @@ final class CaptureEngine: ObservableObject {
             let configuration = SCStreamConfiguration()
             configuration.width = settings.resolution == .custom ? nativeWidth : width
             configuration.height = settings.resolution == .custom ? nativeHeight : height
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
+            configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(effectiveFPS))
             configuration.queueDepth = 3
             configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
             configuration.showsCursor = true
-            configuration.capturesAudio = settings.includeAudio
+            configuration.capturesAudio = settings.includeAudio && sharedAudioFilter
             configuration.excludesCurrentProcessAudio = settings.excludeAppAudio
             configuration.sampleRate = 48_000
             configuration.channelCount = 2
 
-            let pipeline = try CapturePipeline(width: width, height: height, fps: settings.fps,
+            let pipeline = try CapturePipeline(width: width, height: height, fps: effectiveFPS,
                                                duration: max(1, min(settings.clipDuration, 3600)),
                                                memoryLimitMB: max(64, min(settings.memoryLimitMB, 8192)),
                                                bitrateMbps: max(0, min(settings.bitrateMbps, 200)),
                                                resizeFromFullResolution: resizeFromFullResolution,
+                                               colorSettings: settings,
                                                onFirstFrame: { [weak self] sourceWidth, sourceHeight, targetBitrate in
                 Task { @MainActor [weak self] in
-                    self?.captureDetails = "\(width) × \(height) output from \(sourceWidth) × \(sourceHeight) source, up to \(settings.fps) fps, HEVC \(targetBitrate / 1_000_000) Mb/s target"
+                    self?.captureDetails = "\(width) × \(height) output from \(sourceWidth) × \(sourceHeight) source, up to \(effectiveFPS) fps, HEVC \(targetBitrate / 1_000_000) Mb/s target"
                 }
             }) { [weak self] error in
                 Task { @MainActor [weak self] in
@@ -450,13 +544,38 @@ final class CaptureEngine: ObservableObject {
             }
             let stream = SCStream(filter: filter, configuration: configuration, delegate: pipeline)
             try stream.addStreamOutput(pipeline, type: .screen, sampleHandlerQueue: videoQueue)
-            if settings.includeAudio {
+            if settings.includeAudio && sharedAudioFilter {
                 try stream.addStreamOutput(pipeline, type: .audio, sampleHandlerQueue: audioQueue)
             }
-            captureDetails = "Starting \(width) × \(height) output, up to \(settings.fps) fps, HEVC \(pipeline.targetBitrate / 1_000_000) Mb/s target"
+            var separateAudioStream: SCStream?
+            if settings.includeAudio && !sharedAudioFilter {
+                let audioFilter = try appFilter(display: display, mode: settings.audioAppMode,
+                                                ids: settings.audioAppIDs, applications: content.applications,
+                                                kind: "audio")
+                let audioConfiguration = SCStreamConfiguration()
+                audioConfiguration.capturesAudio = true
+                audioConfiguration.excludesCurrentProcessAudio = settings.excludeAppAudio
+                audioConfiguration.sampleRate = 48_000
+                audioConfiguration.channelCount = 2
+                audioConfiguration.width = 2
+                audioConfiguration.height = 2
+                audioConfiguration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+                audioConfiguration.queueDepth = 1
+                let separate = SCStream(filter: audioFilter, configuration: audioConfiguration, delegate: pipeline)
+                try separate.addStreamOutput(pipeline, type: .audio, sampleHandlerQueue: audioQueue)
+                separateAudioStream = separate
+            }
+            captureDetails = "Starting \(width) × \(height) output, up to \(effectiveFPS) fps, HEVC \(pipeline.targetBitrate / 1_000_000) Mb/s target"
             try await stream.startCapture()
+            do {
+                try await separateAudioStream?.startCapture()
+            } catch {
+                try? await stream.stopCapture()
+                throw error
+            }
             self.pipeline = pipeline
             self.stream = stream
+            self.audioStream = separateAudioStream
             activeSettings = settings
             isRunning = true
             status = "Recording"
@@ -469,14 +588,31 @@ final class CaptureEngine: ObservableObject {
     func stop() async {
         if let startTask { await startTask.value }
         guard let stream, let pipeline else { return }
+        if let audioStream { try? await audioStream.stopCapture() }
         do { try await stream.stopCapture() } catch { status = error.localizedDescription }
         pipeline.finish()
         self.stream = nil
+        self.audioStream = nil
         self.pipeline = nil
         activeSettings = nil
         captureDetails = ""
         isRunning = false
         status = "Stopped"
+    }
+
+    private func appFilter(display: SCDisplay, mode: AppSourceMode, ids: [String],
+                           applications: [SCRunningApplication], kind: String) throws -> SCContentFilter {
+        let selected = applications.filter { ids.contains($0.bundleIdentifier) }
+        switch mode {
+        case .all:
+            return SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+        case .only:
+            guard !ids.isEmpty else { throw CaptureError.noSelectedApps(kind) }
+            guard !selected.isEmpty else { throw CaptureError.selectedAppsNotRunning(kind) }
+            return SCContentFilter(display: display, including: selected, exceptingWindows: [])
+        case .exclude:
+            return SCContentFilter(display: display, excludingApplications: selected, exceptingWindows: [])
+        }
     }
 
     func saveClip(seconds: Int) async {

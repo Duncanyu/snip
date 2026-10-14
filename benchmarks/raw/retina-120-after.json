@@ -1,0 +1,340 @@
+{
+  "label": "retina-requested-120-after-60hz-cap",
+  "measured_at": "2026-10-13T19:59:41-04:00",
+  "method": "ps CPU percent (100%=one logical CPU), RSS sampled at the given interval",
+  "pid": 42179,
+  "duration_seconds": 30.0,
+  "interval_seconds": 0.5,
+  "system": {
+    "macos": "27.0.1",
+    "cpu": "Apple M4",
+    "ram_gib": 16.0,
+    "display_pixels": "2940 x 1912",
+    "display_mode": "1470 x 956 @ 60.00Hz"
+  },
+  "settings": {
+    "fps": 120,
+    "resolution": "retina",
+    "bitrateMbps": 16,
+    "clipDuration": 30,
+    "memoryLimitMB": 1024,
+    "includeAudio": true,
+    "videoAppMode": "all",
+    "audioAppMode": "all",
+    "brightness": 0,
+    "contrast": 1,
+    "saturation": 1
+  },
+  "cpu_percent": {
+    "median": 5.1,
+    "p95": 5.71,
+    "max": 6.2
+  },
+  "rss_mib": {
+    "median": 134.36,
+    "p95": 134.47,
+    "max": 134.5
+  },
+  "samples": [
+    {
+      "seconds": 0.0,
+      "cpu_percent": 4.5,
+      "rss_mib": 132.66
+    },
+    {
+      "seconds": 0.5,
+      "cpu_percent": 4.3,
+      "rss_mib": 132.94
+    },
+    {
+      "seconds": 1.0,
+      "cpu_percent": 5.1,
+      "rss_mib": 133.14
+    },
+    {
+      "seconds": 1.51,
+      "cpu_percent": 5.4,
+      "rss_mib": 133.36
+    },
+    {
+      "seconds": 2.01,
+      "cpu_percent": 5.8,
+      "rss_mib": 133.58
+    },
+    {
+      "seconds": 2.5,
+      "cpu_percent": 5.1,
+      "rss_mib": 133.8
+    },
+    {
+      "seconds": 3.01,
+      "cpu_percent": 6.2,
+      "rss_mib": 133.94
+    },
+    {
+      "seconds": 3.51,
+      "cpu_percent": 5.7,
+      "rss_mib": 133.97
+    },
+    {
+      "seconds": 4.0,
+      "cpu_percent": 5.2,
+      "rss_mib": 134.0
+    },
+    {
+      "seconds": 4.5,
+      "cpu_percent": 5.3,
+      "rss_mib": 134.0
+    },
+    {
+      "seconds": 5.0,
+      "cpu_percent": 5.4,
+      "rss_mib": 134.0
+    },
+    {
+      "seconds": 5.5,
+      "cpu_percent": 5.5,
+      "rss_mib": 134.0
+    },
+    {
+      "seconds": 6.0,
+      "cpu_percent": 5.4,
+      "rss_mib": 134.0
+    },
+    {
+      "seconds": 6.5,
+      "cpu_percent": 5.4,
+      "rss_mib": 134.0
+    },
+    {
+      "seconds": 7.01,
+      "cpu_percent": 5.2,
+      "rss_mib": 134.06
+    },
+    {
+      "seconds": 7.51,
+      "cpu_percent": 4.9,
+      "rss_mib": 134.08
+    },
+    {
+      "seconds": 8.01,
+      "cpu_percent": 5.7,
+      "rss_mib": 134.11
+    },
+    {
+      "seconds": 8.5,
+      "cpu_percent": 5.2,
+      "rss_mib": 134.11
+    },
+    {
+      "seconds": 9.0,
+      "cpu_percent": 5.3,
+      "rss_mib": 134.12
+    },
+    {
+      "seconds": 9.51,
+      "cpu_percent": 5.4,
+      "rss_mib": 134.16
+    },
+    {
+      "seconds": 10.0,
+      "cpu_percent": 5.5,
+      "rss_mib": 134.2
+    },
+    {
+      "seconds": 10.5,
+      "cpu_percent": 4.8,
+      "rss_mib": 134.2
+    },
+    {
+      "seconds": 11.0,
+      "cpu_percent": 5.4,
+      "rss_mib": 134.2
+    },
+    {
+      "seconds": 11.51,
+      "cpu_percent": 5.4,
+      "rss_mib": 134.2
+    },
+    {
+      "seconds": 12.0,
+      "cpu_percent": 5.6,
+      "rss_mib": 134.28
+    },
+    {
+      "seconds": 12.5,
+      "cpu_percent": 5.7,
+      "rss_mib": 134.31
+    },
+    {
+      "seconds": 13.0,
+      "cpu_percent": 4.6,
+      "rss_mib": 134.31
+    },
+    {
+      "seconds": 13.5,
+      "cpu_percent": 4.5,
+      "rss_mib": 134.33
+    },
+    {
+      "seconds": 14.0,
+      "cpu_percent": 4.6,
+      "rss_mib": 134.34
+    },
+    {
+      "seconds": 14.51,
+      "cpu_percent": 5.0,
+      "rss_mib": 134.36
+    },
+    {
+      "seconds": 15.0,
+      "cpu_percent": 3.9,
+      "rss_mib": 134.36
+    },
+    {
+      "seconds": 15.5,
+      "cpu_percent": 4.8,
+      "rss_mib": 134.38
+    },
+    {
+      "seconds": 16.01,
+      "cpu_percent": 4.5,
+      "rss_mib": 134.39
+    },
+    {
+      "seconds": 16.5,
+      "cpu_percent": 4.9,
+      "rss_mib": 134.39
+    },
+    {
+      "seconds": 17.0,
+      "cpu_percent": 4.8,
+      "rss_mib": 134.39
+    },
+    {
+      "seconds": 17.5,
+      "cpu_percent": 5.4,
+      "rss_mib": 134.39
+    },
+    {
+      "seconds": 18.0,
+      "cpu_percent": 5.3,
+      "rss_mib": 134.39
+    },
+    {
+      "seconds": 18.5,
+      "cpu_percent": 6.1,
+      "rss_mib": 134.39
+    },
+    {
+      "seconds": 19.0,
+      "cpu_percent": 5.7,
+      "rss_mib": 134.41
+    },
+    {
+      "seconds": 19.5,
+      "cpu_percent": 4.7,
+      "rss_mib": 134.41
+    },
+    {
+      "seconds": 20.01,
+      "cpu_percent": 4.6,
+      "rss_mib": 134.41
+    },
+    {
+      "seconds": 20.5,
+      "cpu_percent": 5.1,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 21.0,
+      "cpu_percent": 4.2,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 21.51,
+      "cpu_percent": 4.8,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 22.0,
+      "cpu_percent": 4.4,
+      "rss_mib": 134.44
+    },
+    {
+      "seconds": 22.5,
+      "cpu_percent": 4.6,
+      "rss_mib": 134.41
+    },
+    {
+      "seconds": 23.0,
+      "cpu_percent": 4.0,
+      "rss_mib": 134.41
+    },
+    {
+      "seconds": 23.5,
+      "cpu_percent": 4.7,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 24.0,
+      "cpu_percent": 4.5,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 24.5,
+      "cpu_percent": 4.7,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 25.0,
+      "cpu_percent": 4.6,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 25.5,
+      "cpu_percent": 5.5,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 26.0,
+      "cpu_percent": 4.5,
+      "rss_mib": 134.42
+    },
+    {
+      "seconds": 26.51,
+      "cpu_percent": 4.7,
+      "rss_mib": 134.47
+    },
+    {
+      "seconds": 27.0,
+      "cpu_percent": 4.6,
+      "rss_mib": 134.47
+    },
+    {
+      "seconds": 27.5,
+      "cpu_percent": 5.2,
+      "rss_mib": 134.47
+    },
+    {
+      "seconds": 28.0,
+      "cpu_percent": 5.6,
+      "rss_mib": 134.47
+    },
+    {
+      "seconds": 28.5,
+      "cpu_percent": 5.0,
+      "rss_mib": 134.5
+    },
+    {
+      "seconds": 29.0,
+      "cpu_percent": 4.6,
+      "rss_mib": 134.5
+    },
+    {
+      "seconds": 29.5,
+      "cpu_percent": 5.5,
+      "rss_mib": 134.5
+    }
+  ]
+}
