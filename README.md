@@ -2,12 +2,6 @@
 
 **Save the last moments of your screen with one shortcut.** Snip is a native macOS recorder that keeps recent video in a compressed rolling buffer, then writes a `.mov` clip when you ask for it.
 
-```text
-Screen → hardware HEVC → compressed rolling buffer ─┐
-App sound ────────────────────────────────────────────┼→ shortcut → .mov clip
-Microphone (optional) ────────────────────────────────┘
-```
-
 **[Download the Apple Silicon preview](https://github.com/Duncanyu/clipper/releases/tag/v0.1.2-preview)** · [Install](#download-and-install) · [Features](#use) · [Measured performance](#measured-performance-and-quality)
 
 ## Download and install
