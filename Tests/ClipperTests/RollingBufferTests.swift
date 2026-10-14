@@ -4,6 +4,29 @@ import XCTest
 @testable import Clipper
 
 final class RollingBufferTests: XCTestCase {
+    func testFrequentAudioExpiryKeepsOnlyRecentSamples() throws {
+        let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        let buffer = RollingBuffer(seconds: 1, maxBytes: 100_000)
+        buffer.addVideo(try sample(at: now - 1, keyframe: true))
+        for index in 0..<400 {
+            XCTAssertTrue(buffer.addAudio(try pcmSample(at: now - 4 + Double(index) / 100)))
+        }
+        let clip = try buffer.snapshot(seconds: 1)
+        XCTAssertTrue((95...101).contains(clip.audio.count))
+        XCTAssertTrue(clip.audio.allSatisfy { $0.time.seconds >= now - 1 })
+        XCTAssertLessThanOrEqual(clip.audio.reduce(0) { $0 + $1.bytes }, 100_000)
+
+        let byteLimited = RollingBuffer(seconds: 30, maxBytes: 5_000)
+        byteLimited.addVideo(try sample(at: now - 1, keyframe: true))
+        for index in 0..<400 {
+            XCTAssertTrue(byteLimited.addAudio(try pcmSample(at: now - 4 + Double(index) / 100)))
+        }
+        let capped = try byteLimited.snapshot(seconds: 1)
+        XCTAssertEqual(capped.audio.count, 49)
+        XCTAssertLessThanOrEqual(capped.video.reduce(0) { $0 + $1.bytes } +
+                                 capped.audio.reduce(0) { $0 + $1.bytes }, 5_000)
+    }
+
     func testKeyframeTimeByteTrimmingAndQuietScreenSnapshot() throws {
         let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
         let frames: [(Double, Bool)] = [(5, true), (4, false), (3, true),

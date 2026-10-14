@@ -1,17 +1,21 @@
 # Snip
 
-Snip is a native macOS rolling screen recorder. It keeps recent video in a compressed memory buffer so a shortcut can save the last few seconds without starting a new recording. It supports system audio, app specific video and audio rules, color adjustments, custom resolution, and a configurable memory cap.
+**Save the last moments of your screen with one shortcut.** Snip is a native macOS recorder that keeps recent video in a compressed rolling buffer, then writes a `.mov` clip when you ask for it.
+
+![Screen and audio flow through hardware HEVC into a compressed rolling buffer, then become a clip on a shortcut](docs/how-it-works.svg)
+
+**[Download the Apple Silicon preview](https://github.com/Duncanyu/clipper/releases/tag/v0.1.1-preview)** · [Install](#download-and-install) · [Features](#use) · [Measured performance](#measured-performance-and-quality)
 
 ## Download and install
 
-Download **Snip-v0.1.0-preview-macos-arm64.zip** from the [0.1.0 preview release](https://github.com/Duncanyu/clipper/releases/tag/v0.1.0-preview). This preview requires an Apple Silicon Mac running macOS 15 or later.
+Download **Snip-v0.1.1-preview-macos-arm64.zip** from the [0.1.1 preview release](https://github.com/Duncanyu/clipper/releases/tag/v0.1.1-preview). It requires an Apple Silicon Mac running macOS 15 or later.
 
 1. Unzip the download and drag **Snip.app** into **Applications**.
 2. Open Snip from Applications. This preview is ad hoc signed and is **not notarized**. If macOS blocks the first launch, try opening it once, then go to **System Settings → Privacy & Security → Open Anyway** and confirm. See [Apple's instructions](https://support.apple.com/en-us/102445). Only bypass this warning for a copy you downloaded from this repository.
 3. Allow **Screen & System Audio Recording** when macOS asks. If you change this permission in System Settings, quit and reopen Snip.
 4. Snip appears in the menu bar while capture is active. Choose **Settings** there to select a display, clip length, quality, shortcuts, and save folder. If the menu bar icon is hidden, open Snip from the Dock to show Settings.
 
-The release includes a SHA-256 checksum file so you can verify the ZIP with `shasum -a 256 Snip-v0.1.0-preview-macos-arm64.zip`.
+The release includes a SHA-256 checksum file. Place it beside the ZIP and run `shasum -a 256 -c Snip-v0.1.1-preview-macos-arm64.zip.sha256` to verify the download.
 
 ## Use
 
@@ -24,16 +28,22 @@ The release includes a SHA-256 checksum file so you can verify the ZIP with `sha
 
 ## Measured performance and quality
 
-On an **Apple M4 Mac with 16 GiB RAM and macOS 27.0.1**, a 30-second stationary desktop sample at **2940 × 1912 Retina output**, system audio, 16 Mbps target, and a requested 120 FPS on a 60 Hz display measured:
+![Two comparisons of Snip CPU use and a full resolution clip quality check](docs/performance.svg)
 
-| Build | Median CPU¹ | 95th percentile CPU¹ | Median memory (RSS) |
+On an **Apple M4 with 16 GiB RAM and macOS 27.0.1**, using **2940 × 1912 Retina output**, a 16 Mbps target, system audio, and a 60 Hz display:
+
+| 30-second observation | Median CPU¹ | 95th percentile CPU¹ | Median memory (RSS) |
 | --- | ---: | ---: | ---: |
-| Before display refresh cap | 21.0% | 27.62% | 151.41 MiB |
-| With display refresh cap | 5.1% | 5.71% | 134.36 MiB |
+| Paused | 0.0% | 0.5% | 195 MiB² |
+| Stationary, before refresh cap | 21.0% | 27.62% | 151 MiB |
+| Stationary, with refresh cap | 5.1% | 5.71% | 134 MiB |
+| Stationary, after audio trim change | 4.15% | 4.6% | 148 MiB |
+| Moving tiles, before audio trim change | 5.3% | 6.0% | 155 MiB |
+| Moving tiles, after audio trim change | 4.1% | 4.6% | 149 MiB |
 
-¹ `ps` CPU percentage: 100% is one logical CPU, not the whole Mac. These are two short observations, not a controlled game performance test. The improvement may include ordinary workload variation; it should not be treated as a guaranteed speedup. A saved clip was confirmed as **2940 × 1912 HEVC Main with AAC 48 kHz audio**, matching the display's physical pixel dimensions. That short clip alone does not measure visual fidelity or sustained frame delivery.
+¹ `ps` CPU percentage: 100% is one logical CPU. ² Paused RSS retained memory from earlier capture, so it is not a fresh launch baseline. A saved **30.5-second** clip from the optimized build was **2940 × 1912 HEVC Main**, **15.86 Mbps** actual whole-file bitrate, **57.38 decoded frames per second** on average, and **AAC 48 kHz** audio. Median and 95th percentile frame gaps were both 16.67 ms. Its full pixel dimensions and cadence remained comparable to the clip before the audio optimization.
 
-See the [measurement report](benchmarks/2026-10-13-m4.md), [raw samples](benchmarks/raw/), and [reproducible measurement script](scripts/benchmark.py) for the method, exact settings, and limits.
+These are individual observations of a desktop and a synthetic moving window, not a game frame-time benchmark or a measure of perceptual fidelity. See the [measurement report](benchmarks/2026-10-13-m4.md), [raw samples](benchmarks/raw/), [measurement script](scripts/benchmark.py), and [moving test scene](scripts/benchmark-scene.swift) for the method and limits.
 
 ## Build from source
 

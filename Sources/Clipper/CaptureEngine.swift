@@ -30,6 +30,8 @@ final class RollingBuffer {
     private let lock = NSLock()
     private var video: [VideoPacket] = []
     private var audio: [AudioPacket] = []
+    private var audioHead = 0
+    private var staleAudioBytes = 0
     private var totalBytes = 0
     private let seconds: Double
     private let maxBytes: Int
@@ -93,9 +95,7 @@ final class RollingBuffer {
 
     private func trim() {
         if let newestAudio = audio.last {
-            let expired = audio.prefix(while: { $0.time.seconds < newestAudio.time.seconds - seconds })
-            totalBytes -= expired.reduce(0) { $0 + $1.bytes }
-            audio.removeFirst(expired.count)
+            discardAudio(olderThan: newestAudio.time.seconds - seconds)
         }
         if let newestVideo = video.last {
             let cutoff = newestVideo.time.seconds - seconds
@@ -109,17 +109,35 @@ final class RollingBuffer {
             discardVideo(nextKeyframe)
         }
         if let firstTime = video.first?.time.seconds {
-            let removed = audio.prefix(while: { $0.time.seconds < firstTime })
-            totalBytes -= removed.reduce(0) { $0 + $1.bytes }
-            audio.removeFirst(removed.count)
+            discardAudio(olderThan: firstTime)
         }
-        while totalBytes > maxBytes, !audio.isEmpty {
-            totalBytes -= audio.removeFirst().bytes
+        while totalBytes > maxBytes, audioHead < audio.count {
+            discardOldestAudio()
         }
         if totalBytes > maxBytes {
             totalBytes -= video.reduce(0) { $0 + $1.bytes }
             video.removeAll()
         }
+        // Audio arrives much more often than video. Move the head instead of
+        // copying the entire packet array for every expired audio callback.
+        if audioHead > 0 && (audioHead * 2 >= audio.count || staleAudioBytes >= 8 * 1_048_576) {
+            audio.removeFirst(audioHead)
+            audioHead = 0
+            staleAudioBytes = 0
+        }
+    }
+
+    private func discardAudio(olderThan cutoff: Double) {
+        while audioHead < audio.count && audio[audioHead].time.seconds < cutoff {
+            discardOldestAudio()
+        }
+    }
+
+    private func discardOldestAudio() {
+        let bytes = audio[audioHead].bytes
+        totalBytes -= bytes
+        staleAudioBytes += bytes
+        audioHead += 1
     }
 
     private func discardVideo(_ count: Int) {
@@ -148,7 +166,7 @@ final class RollingBuffer {
                                                                 sampleBufferOut: &held)
             guard result == noErr, let held else { throw CaptureError.writer("Could not hold the last frame") }
             let still = VideoPacket(sample: held, time: startTime, bytes: keyframe.bytes, isKeyframe: true)
-            let recentAudio = audio.filter { $0.time.seconds >= wanted && $0.time.seconds <= now.seconds }
+            let recentAudio = audio[audioHead...].filter { $0.time.seconds >= wanted && $0.time.seconds <= now.seconds }
             return ClipSnapshot(video: [still], audio: recentAudio, duration: Double(seconds), endTime: now)
         }
         let start = video.indices.last(where: { video[$0].isKeyframe && video[$0].time.seconds <= wanted })
@@ -171,7 +189,7 @@ final class RollingBuffer {
             selected[selected.count - 1] = VideoPacket(sample: heldSample, time: last.time,
                                                        bytes: last.bytes, isKeyframe: last.isKeyframe)
         }
-        let audioSamples = audio.filter { $0.time.seconds >= firstTime && $0.time.seconds <= now.seconds }
+        let audioSamples = audio[audioHead...].filter { $0.time.seconds >= firstTime && $0.time.seconds <= now.seconds }
         return ClipSnapshot(video: selected, audio: audioSamples, duration: now.seconds - firstTime, endTime: now)
     }
 }

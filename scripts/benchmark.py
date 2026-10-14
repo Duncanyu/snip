@@ -7,6 +7,7 @@ import plistlib
 import subprocess
 import time
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 
 
@@ -110,6 +111,8 @@ def inspect(args):
         except ValueError:
             pass
     gaps = [(later - earlier) * 1000 for earlier, later in zip(timestamps, timestamps[1:]) if later > earlier]
+    nominal_fps = float(Fraction(video.get("r_frame_rate", "0/1")))
+    long_gaps = sum(gap > 1500 / nominal_fps for gap in gaps) if nominal_fps else None
     data["clip"] = {
         "duration_seconds": round(duration, 3),
         "size_mib": round(size / 2**20, 2),
@@ -123,7 +126,9 @@ def inspect(args):
         "nominal_frame_rate": video.get("r_frame_rate"),
         "average_frame_rate": video.get("avg_frame_rate"),
         "video_frames": len(timestamps),
+        "decoded_frame_rate": round(len(timestamps) / duration, 2),
         "frame_gap_ms": summary(gaps),
+        "frame_gaps_over_1_5_intervals": long_gaps,
         "audio_codec": audio.get("codec_name") if audio else None,
         "audio_sample_rate": audio.get("sample_rate") if audio else None,
     }

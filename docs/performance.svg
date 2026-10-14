@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" role="img" aria-labelledby="title desc">
+  <title id="title">Snip capture performance on an Apple M4</title>
+  <desc id="desc">Median process CPU was 21.0 percent before refresh capping and 5.1 percent after on a stationary desktop. On the same moving tile test it was 5.3 percent before audio buffer optimization and 4.1 percent after. A 30 second Retina clip remained 2940 by 1912 pixels.</desc>
+  <rect width="960" height="600" rx="24" fill="#0b1220"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, sans-serif">
+    <text x="30" y="43" fill="#f8fafc" font-size="26" font-weight="700">Capture performance</text>
+    <text x="30" y="69" fill="#94a3b8" font-size="15">Apple M4 · 16 GiB RAM · Retina 2940 × 1912 · 60 Hz display</text>
+    <text x="30" y="93" fill="#94a3b8" font-size="13">30-second samples · CPU as % of one logical core · lower is better</text>
+
+    <rect x="24" y="112" width="912" height="181" rx="18" fill="#142238"/>
+    <text x="46" y="145" fill="#e2e8f0" font-size="18" font-weight="700">Stationary desktop</text>
+    <text x="46" y="167" fill="#94a3b8" font-size="13">120 FPS selected on a 60 Hz display · 16 Mbps target</text>
+    <text x="46" y="207" fill="#cbd5e1" font-size="15">Before refresh cap</text>
+    <rect x="300" y="188" width="500" height="24" rx="12" fill="#25354c"/>
+    <rect x="300" y="188" width="420" height="24" rx="12" fill="#fb7185"/>
+    <text x="820" y="207" fill="#f8fafc" font-size="17" font-weight="700">21.0%</text>
+    <text x="46" y="250" fill="#cbd5e1" font-size="15">With refresh cap</text>
+    <rect x="300" y="231" width="500" height="24" rx="12" fill="#25354c"/>
+    <rect x="300" y="231" width="102" height="24" rx="12" fill="#22d3ee"/>
+    <text x="820" y="250" fill="#f8fafc" font-size="17" font-weight="700">5.1%</text>
+
+    <rect x="24" y="310" width="912" height="181" rx="18" fill="#142238"/>
+    <text x="46" y="343" fill="#e2e8f0" font-size="18" font-weight="700">Moving color tiles</text>
+    <text x="46" y="365" fill="#94a3b8" font-size="13">Same 60 Hz cap, Retina size, bitrate, and animation script</text>
+    <text x="46" y="405" fill="#cbd5e1" font-size="15">Before audio trim change</text>
+    <rect x="300" y="386" width="500" height="24" rx="12" fill="#25354c"/>
+    <rect x="300" y="386" width="379" height="24" rx="12" fill="#a78bfa"/>
+    <text x="820" y="405" fill="#f8fafc" font-size="17" font-weight="700">5.3%</text>
+    <text x="46" y="448" fill="#cbd5e1" font-size="15">After audio trim change</text>
+    <rect x="300" y="429" width="500" height="24" rx="12" fill="#25354c"/>
+    <rect x="300" y="429" width="293" height="24" rx="12" fill="#34d399"/>
+    <text x="820" y="448" fill="#f8fafc" font-size="17" font-weight="700">4.1%</text>
+
+    <text x="30" y="532" fill="#f8fafc" font-size="16" font-weight="700">Quality check</text>
+    <text x="153" y="532" fill="#cbd5e1" font-size="15">30.5-second HEVC clip · 2940 × 1912 · 57.38 decoded FPS · AAC 48 kHz</text>
+    <text x="30" y="567" fill="#94a3b8" font-size="12">Single runs, not a game frame-time benchmark. See the report and raw samples for method and limits.</text>
+  </g>
+</svg>
