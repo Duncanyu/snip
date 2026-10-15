@@ -93,6 +93,7 @@ final class RollingBufferTests: XCTestCase {
         XCTAssertEqual(settings.bitrateMbps, 0)
         XCTAssertTrue(settings.excludeAppAudio)
         XCTAssertFalse(settings.recordMicrophone)
+        XCTAssertNil(settings.microphoneDeviceID)
         XCTAssertEqual(settings.videoAppMode, .all)
         XCTAssertEqual(settings.audioAppMode, .all)
         XCTAssertFalse(settings.hasColorEdit)
@@ -107,6 +108,13 @@ final class RollingBufferTests: XCTestCase {
         edited = settings
         edited.recordMicrophone = true
         XCTAssertTrue(edited.needsCaptureRestart(comparedTo: settings))
+        edited = settings
+        edited.microphoneDeviceID = "microphone-1"
+        XCTAssertFalse(edited.needsCaptureRestart(comparedTo: settings))
+        edited.recordMicrophone = true
+        var otherMicrophone = edited
+        otherMicrophone.microphoneDeviceID = "microphone-2"
+        XCTAssertTrue(otherMicrophone.needsCaptureRestart(comparedTo: edited))
         edited = settings
         edited.excludeAppAudio = false
         XCTAssertFalse(try JSONDecoder().decode(CaptureSettings.self,
@@ -163,6 +171,7 @@ final class RollingBufferTests: XCTestCase {
         settings.videoAppIDs = ["com.example.game", "com.example.game", "com.example.chat"]
         settings.audioAppMode = .exclude
         settings.audioAppIDs = ["com.example.chat"]
+        settings.microphoneDeviceID = "microphone-1"
         settings.brightness = 0.1
         settings.contrast = 1.2
         settings.saturation = 0.8
@@ -171,6 +180,7 @@ final class RollingBufferTests: XCTestCase {
         XCTAssertEqual(restored.videoAppIDs, ["com.example.chat", "com.example.game"])
         XCTAssertEqual(restored.audioAppMode, .exclude)
         XCTAssertEqual(restored.audioAppIDs, ["com.example.chat"])
+        XCTAssertEqual(restored.microphoneDeviceID, "microphone-1")
         XCTAssertTrue(restored.hasColorEdit)
         XCTAssertTrue(restored.needsCaptureRestart(comparedTo: CaptureSettings()))
 

@@ -82,6 +82,7 @@ struct CaptureSettings: Codable, Equatable {
     var displayID: CGDirectDisplayID?
     var includeAudio = true
     var recordMicrophone = false
+    var microphoneDeviceID: String?
     var excludeAppAudio = true
     var videoAppMode: AppSourceMode = .all
     var videoAppIDs: [String] = []
@@ -115,7 +116,7 @@ struct CaptureSettings: Codable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case clipDuration, fps, resolution, memoryLimitMB, displayID, includeAudio, recordMicrophone, excludeAppAudio
+        case clipDuration, fps, resolution, memoryLimitMB, displayID, includeAudio, recordMicrophone, microphoneDeviceID, excludeAppAudio
         case videoAppMode, videoAppIDs, audioAppMode, audioAppIDs
         case showInMenuBar, menuBarPreferenceInitialized
         case customWidth, customHeight, bitrateMbps, brightness, contrast, saturation
@@ -138,6 +139,7 @@ struct CaptureSettings: Codable, Equatable {
         displayID = try values.decodeIfPresent(CGDirectDisplayID.self, forKey: .displayID)
         includeAudio = try values.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? includeAudio
         recordMicrophone = try values.decodeIfPresent(Bool.self, forKey: .recordMicrophone) ?? recordMicrophone
+        microphoneDeviceID = try values.decodeIfPresent(String.self, forKey: .microphoneDeviceID)
         excludeAppAudio = try values.decodeIfPresent(Bool.self, forKey: .excludeAppAudio) ?? excludeAppAudio
         videoAppMode = try values.decodeIfPresent(AppSourceMode.self, forKey: .videoAppMode) ?? videoAppMode
         videoAppIDs = try values.decodeIfPresent([String].self, forKey: .videoAppIDs) ?? videoAppIDs
@@ -183,6 +185,7 @@ struct CaptureSettings: Codable, Equatable {
         value.saturation = saturation.isFinite ? min(max(saturation, 0), 2) : 1
         value.videoAppIDs = Array(Set(videoAppIDs.filter { !$0.isEmpty })).sorted()
         value.audioAppIDs = Array(Set(audioAppIDs.filter { !$0.isEmpty })).sorted()
+        if value.microphoneDeviceID?.isEmpty == true { value.microphoneDeviceID = nil }
         value.clipName = clipName.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
@@ -232,6 +235,7 @@ struct CaptureSettings: Codable, Equatable {
         customSizeChanged || bitrateMbps != other.bitrateMbps || clipDuration != other.clipDuration ||
         memoryLimitMB != other.memoryLimitMB || includeAudio != other.includeAudio ||
         recordMicrophone != other.recordMicrophone ||
+        ((recordMicrophone || other.recordMicrophone) && microphoneDeviceID != other.microphoneDeviceID) ||
         excludeAppAudio != other.excludeAppAudio || videoAppMode != other.videoAppMode ||
         videoAppIDs != other.videoAppIDs || audioAppMode != other.audioAppMode ||
         audioAppIDs != other.audioAppIDs || brightness != other.brightness ||
@@ -618,7 +622,7 @@ private struct CaptureSettingsView: View {
     @ObservedObject private var store = CaptureSettingsStore.shared
     @State private var page = 0
     @State private var settingsPage = 0
-    @State private var professional = false
+    @State private var microphoneRefresh = 0
 
     private let background = Color(red: 0.115, green: 0.12, blue: 0.17)
     private let surface = Color(red: 0.15, green: 0.16, blue: 0.21)
@@ -627,12 +631,12 @@ private struct CaptureSettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
-                Image(systemName: "display")
+                Image(systemName: "record.circle")
                     .font(.system(size: 27)).foregroundStyle(accent)
                     .frame(width: 42)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(page == 0 ? "Color controls" : "Settings").font(.title2.bold())
-                    Text(page == 0 ? "Adjust the recorded video" : "Capture preferences and tools")
+                    Text(page == 0 ? "Snip recorder" : "Settings").font(.title2.bold())
+                    Text(page == 0 ? "Save the last moments of your screen" : "Capture preferences and sources")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -665,35 +669,30 @@ private struct CaptureSettingsView: View {
 
             if page == 0 {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Picker("Mode", selection: $professional) {
-                            Text("Beginner").tag(false)
-                            Text("Professional").tag(true)
-                        }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 340)
-                        colorTab
-                    }
+                    recordingPage
                     .padding(.horizontal, 24)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
                 VStack(spacing: 12) {
                     Picker("Settings section", selection: $settingsPage) {
-                        Text("App").tag(0)
+                        Text("Sources").tag(0)
                         Text("Video").tag(1)
-                        Text("Sources").tag(2)
-                        Text("Clips").tag(3)
+                        Text("Clips").tag(2)
+                        Text("Color").tag(3)
+                        Text("App").tag(4)
                     }
-                    .pickerStyle(.segmented).labelsHidden().frame(width: 400)
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 510)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 24)
                     ScrollView {
                         Group {
                             switch settingsPage {
-                            case 0: appTab
+                            case 0: sourcesTab
                             case 1: captureTab
-                            case 2: sourcesTab
-                            default: clipsTab
+                            case 2: clipsTab
+                            case 3: colorTab
+                            default: appTab
                             }
                         }
                         .padding(.horizontal, 16)
@@ -705,7 +704,7 @@ private struct CaptureSettingsView: View {
                 if let sourceValidation {
                     Text(sourceValidation).foregroundStyle(.orange).font(.caption)
                 } else {
-                    Text("Color settings affect saved clips, not the display or backlight.")
+                    Text("\(store.settings.hotkeyLabel) saves the recent clip.")
                         .foregroundStyle(.secondary).font(.caption)
                 }
                 Spacer()
@@ -754,6 +753,94 @@ private struct CaptureSettingsView: View {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == id
         }?.localizedName ?? "Display \(id)"
         return id == CGMainDisplayID() ? "\(name) · Main" : name
+    }
+
+    private var recordingPage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Recent clip").font(.headline)
+                Text(engine.isRunning ? "Snip is keeping the latest moments ready." :
+                     "Start capture to keep recent video ready to save.")
+                    .foregroundStyle(.secondary)
+                if engine.isRunning && !engine.captureDetails.isEmpty {
+                    Text(engine.captureDetails).font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Save last \(engine.activeSettings?.clipDuration ?? store.settings.clipDuration) seconds") {
+                    Task { await engine.saveClip(seconds: engine.activeSettings?.clipDuration
+                                                 ?? store.settings.clipDuration) }
+                }
+                .buttonStyle(.borderedProminent).disabled(!engine.isRunning)
+            }
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(surface, in: RoundedRectangle(cornerRadius: 16))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Recording setup").font(.headline)
+                HStack(spacing: 16) {
+                    setting("Clip length (seconds)") {
+                        TextField("Seconds", value: $store.settings.clipDuration, format: .number)
+                            .textFieldStyle(.roundedBorder).frame(width: 110)
+                    }
+                    setting("Quality") {
+                        Menu(qualityTitle) {
+                            ForEach(QualityPreset.allCases) { preset in
+                                Button(preset.summary) { apply(preset) }
+                            }
+                        }
+                    }
+                }
+                Text("\(store.settings.fps) FPS · \(store.settings.resolution.title)")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Video settings…") { page = 1; settingsPage = 1 }
+            }
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(surface, in: RoundedRectangle(cornerRadius: 16))
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack {
+                    Text("Sources").font(.headline)
+                    Spacer()
+                    Button("Choose sources…") { page = 1; settingsPage = 0 }
+                }
+                sourceSummary("Video", detail: store.settings.videoAppMode.title)
+                sourceSummary("App audio", detail: store.settings.includeAudio
+                              ? store.settings.audioAppMode.title : "Off")
+                sourceSummary("Microphone", detail: microphoneSummary)
+            }
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(surface, in: RoundedRectangle(cornerRadius: 16))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Save location").font(.headline)
+                Text(folderLabel).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2).textSelection(.enabled)
+                Button("Clip settings…") { page = 1; settingsPage = 2 }
+            }
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .background(surface, in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+
+    private func sourceSummary(_ title: String, detail: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(detail).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .font(.subheadline)
+    }
+
+    private var microphoneDevices: [AVCaptureDevice] {
+        _ = microphoneRefresh
+        return AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone], mediaType: .audio, position: .unspecified
+        ).devices
+    }
+
+    private var microphoneSummary: String {
+        guard store.settings.recordMicrophone else { return "Off" }
+        guard let id = store.settings.microphoneDeviceID else { return "System default" }
+        return microphoneDevices.first(where: { $0.uniqueID == id })?.localizedName ?? "Unavailable"
     }
 
     private var captureTab: some View {
@@ -830,71 +917,23 @@ private struct CaptureSettingsView: View {
     }
 
     private var colorTab: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Quick looks").font(.headline)
-                HStack {
-                    quickLook("Neutral", brightness: 0, contrast: 1, saturation: 1)
-                    Spacer()
-                    quickLook("Bright", brightness: 0.1, contrast: 1, saturation: 1)
-                    Spacer()
-                    quickLook("Contrast", brightness: 0, contrast: 1.2, saturation: 1)
-                    Spacer()
-                    quickLook("Vivid", brightness: 0, contrast: 1.1, saturation: 1.35)
-                }
-                .padding(9).background(surface, in: RoundedRectangle(cornerRadius: 16))
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Recorded video color").font(.headline)
+            Text("These optional adjustments affect saved clips only.")
+                .font(.caption).foregroundStyle(.secondary)
+            VStack(spacing: 12) {
+                colorSlider("Brightness", value: $store.settings.brightness,
+                            range: -0.25...0.25, neutral: 0)
+                colorSlider("Contrast", value: $store.settings.contrast,
+                            range: 0.5...1.5, neutral: 1)
+                colorSlider("Saturation", value: $store.settings.saturation,
+                            range: 0...2, neutral: 1)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Preview for saved clips").font(.headline)
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Tone levels").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                    HStack(spacing: 10) {
-                        ForEach(0..<5) { index in
-                            VStack(spacing: 6) {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color(white: previewTone(Double(index) / 4)))
-                                    .frame(height: 42)
-                                    .overlay(RoundedRectangle(cornerRadius: 6)
-                                        .stroke(.white.opacity(0.13)))
-                                Text("\(index * 25)% input").font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Text("Color channels").font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary).padding(.top, 4)
-                    HStack(spacing: 10) {
-                        channelPreview("Red", color: .red)
-                        channelPreview("Green", color: .green)
-                        channelPreview("Blue", color: .blue)
-                    }
-                    Text("This preview approximates the color adjustment in a saved clip.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 16))
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Light and color").font(.headline)
-                VStack(spacing: 18) {
-                    colorSlider("Brightness", value: $store.settings.brightness,
-                                range: -0.25...0.25, neutral: 0)
-                    colorSlider("Contrast", value: $store.settings.contrast,
-                                range: 0.5...1.5, neutral: 1)
-                    colorSlider("Saturation", value: $store.settings.saturation,
-                                range: 0...2, neutral: 1)
-                }
-                .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 16))
-            }
+            .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 16))
             Button("Reset color") { setColor(brightness: 0, contrast: 1, saturation: 1) }
                 .disabled(!store.settings.hasColorEdit)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private func quickLook(_ title: String, brightness: Double, contrast: Double,
-                           saturation: Double) -> some View {
-        Button(title) { setColor(brightness: brightness, contrast: contrast, saturation: saturation) }
-            .buttonStyle(.bordered).tint(surface).foregroundStyle(.primary)
     }
 
     private func setColor(brightness: Double, contrast: Double, saturation: Double) {
@@ -903,35 +942,14 @@ private struct CaptureSettingsView: View {
         store.settings.saturation = saturation
     }
 
-    private func previewTone(_ input: Double) -> Double {
-        min(max((input - 0.5) * store.settings.contrast + 0.5 + store.settings.brightness, 0), 1)
-    }
-
-    private func channelPreview(_ title: String, color: Color) -> some View {
-        VStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 6).fill(color).frame(height: 42)
-            Text(title).font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
     private func colorSlider(_ title: String, value: Binding<Double>,
                              range: ClosedRange<Double>, neutral: Double) -> some View {
         VStack(spacing: 5) {
             HStack {
-                Text(title).font(.headline)
+                Text(title).font(.subheadline.weight(.semibold))
                 Spacer()
-                Text("Default \(neutral, specifier: "%.2f")")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            HStack {
-                Slider(value: value, in: range)
-                if professional {
-                    TextField(title, value: value, format: .number.precision(.fractionLength(2)))
-                        .frame(width: 62).textFieldStyle(.roundedBorder)
-                } else {
-                    Text(value.wrappedValue, format: .number.precision(.fractionLength(2)))
-                        .monospacedDigit().frame(width: 44, alignment: .trailing)
-                }
+                Text(value.wrappedValue, format: .number.precision(.fractionLength(2)))
+                    .monospacedDigit().foregroundStyle(.secondary)
                 Button { value.wrappedValue = neutral } label: {
                     Image(systemName: "arrow.counterclockwise")
                 }
@@ -939,35 +957,53 @@ private struct CaptureSettingsView: View {
                 .disabled(abs(value.wrappedValue - neutral) < 0.001)
                 .accessibilityLabel("Reset \(title)")
             }
+            Slider(value: value, in: range)
         }
     }
 
     private var sourcesTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                sourceRule("Video apps", mode: $store.settings.videoAppMode, ids: $store.settings.videoAppIDs)
-                GroupBox("Audio sources") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Record sound from apps", isOn: $store.settings.includeAudio)
-                        Toggle("Record microphone", isOn: $store.settings.recordMicrophone)
-                        if store.settings.recordMicrophone {
-                            Text("Input: " + (AVCaptureDevice.default(for: .audio)?.localizedName ?? "Default microphone"))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Toggle("Exclude Snip's save sound from clips", isOn: $store.settings.excludeAppAudio)
-                            .disabled(!store.settings.includeAudio)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 14) {
+            sourceRule("Video sources", mode: $store.settings.videoAppMode,
+                       ids: $store.settings.videoAppIDs)
+            GroupBox("Audio sources") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Record app audio", isOn: $store.settings.includeAudio)
+                    Toggle("Exclude Snip's save sound", isOn: $store.settings.excludeAppAudio)
+                        .disabled(!store.settings.includeAudio)
+                    sourceRule("Apps to hear", mode: $store.settings.audioAppMode,
+                               ids: $store.settings.audioAppIDs)
+                        .disabled(!store.settings.includeAudio)
                 }
-                sourceRule("Sound from apps", mode: $store.settings.audioAppMode, ids: $store.settings.audioAppIDs)
-                    .disabled(!store.settings.includeAudio)
-                Text("App sound rules do not affect the microphone.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("App rules update as apps open and close. An Only rule needs a capturable app window.")
-                    .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(8)
+            GroupBox("Microphone sources") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Record microphone", isOn: $store.settings.recordMicrophone)
+                    Picker("Microphone", selection: $store.settings.microphoneDeviceID) {
+                        Text("System default").tag(Optional<String>.none)
+                        ForEach(microphoneDevices, id: \.uniqueID) { device in
+                            Text(device.localizedName).tag(Optional(device.uniqueID))
+                        }
+                        if let id = store.settings.microphoneDeviceID,
+                           !microphoneDevices.contains(where: { $0.uniqueID == id }) {
+                            Text("Unavailable microphone").tag(Optional(id))
+                        }
+                    }
+                    .disabled(!store.settings.recordMicrophone)
+                    Button("Refresh microphones") { microphoneRefresh += 1 }
+                    if store.settings.recordMicrophone,
+                       let id = store.settings.microphoneDeviceID,
+                       !microphoneDevices.contains(where: { $0.uniqueID == id }) {
+                        Text("Selected microphone is disconnected. Choose another before recording.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text("Video and app audio rules follow running apps. Microphone selection is independent.")
+                .font(.caption).foregroundStyle(.secondary)
         }
+        .padding(8)
     }
 
     private var clipsTab: some View {
@@ -1063,6 +1099,10 @@ private struct CaptureSettingsView: View {
         if s.videoAppMode == .only && s.videoAppIDs.isEmpty { return "Choose a video app to record." }
         if s.includeAudio && s.audioAppMode == .only && s.audioAppIDs.isEmpty {
             return "Choose an app whose sound to record."
+        }
+        if s.recordMicrophone, let id = s.microphoneDeviceID,
+           !microphoneDevices.contains(where: { $0.uniqueID == id }) {
+            return "Choose an available microphone."
         }
         return nil
     }
@@ -1194,19 +1234,20 @@ private struct CaptureSettingsView: View {
 private struct CompactControlsView: View {
     @ObservedObject private var engine = CaptureEngine.shared
     @ObservedObject private var store = CaptureSettingsStore.shared
-    @State private var professional = false
     let openEditor: () -> Void
     let quit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 15) {
             HStack {
-                Text("Snip controls").font(.title3.bold())
+                Text("Snip recorder").font(.title3.bold())
                 Spacer()
                 Button(action: openEditor) { Image(systemName: "gearshape") }
                     .buttonStyle(.plain).accessibilityLabel("Open settings")
                 Toggle("Capture", isOn: captureBinding).labelsHidden().toggleStyle(.switch)
             }
+            Text(engine.isRunning ? "Keeping recent video ready" : "Capture paused")
+                .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Text("Display").font(.headline)
                 Picker("Display", selection: $store.settings.displayID) {
@@ -1219,32 +1260,36 @@ private struct CompactControlsView: View {
                 }
                 .labelsHidden().pickerStyle(.menu)
             }
-            Picker("Mode", selection: $professional) {
-                Text("Beginner").tag(false)
-                Text("Professional").tag(true)
-            }
-            .pickerStyle(.segmented).labelsHidden()
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Preview for saved clips").font(.subheadline.weight(.semibold))
-                LinearGradient(colors: [.black, .gray, .white], startPoint: .leading, endPoint: .trailing)
-                    .frame(height: 25).clipShape(RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Recent clip").font(.headline)
                 HStack {
-                    Text("Black"); Spacer(); Text("Midtone"); Spacer(); Text("White")
+                    Text("Length")
+                    TextField("Seconds", value: $store.settings.clipDuration, format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 75)
+                    Text("seconds")
+                    Spacer()
                 }
-                .font(.caption).foregroundStyle(.secondary)
-            }
-            compactSlider("Brightness", value: $store.settings.brightness, range: -0.25...0.25)
-            compactSlider("Contrast", value: $store.settings.contrast, range: 0.5...1.5)
-            compactSlider("Saturation", value: $store.settings.saturation, range: 0...2)
-            HStack {
-                Button("Save last \(engine.activeSettings?.clipDuration ?? store.settings.clipDuration)s") {
+                Button("Save last \(engine.activeSettings?.clipDuration ?? store.settings.clipDuration) seconds") {
                     Task { await engine.saveClip(seconds: engine.activeSettings?.clipDuration
                                                  ?? store.settings.clipDuration) }
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(!engine.isRunning)
-                Spacer()
-                Button("Apply color") { Task { _ = await store.apply() } }
             }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sources").font(.headline)
+                sourceRow("Video", detail: store.settings.videoAppMode.title)
+                sourceRow("App audio", detail: store.settings.includeAudio
+                          ? store.settings.audioAppMode.title : "Off")
+                sourceRow("Microphone", detail: microphoneSummary)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+            Text(engine.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             Divider()
             HStack {
                 Button("Full editor", action: openEditor)
@@ -1269,21 +1314,20 @@ private struct CompactControlsView: View {
         })
     }
 
-    private func compactSlider(_ title: String, value: Binding<Double>,
-                               range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).font(.subheadline.weight(.semibold))
-                Spacer()
-                if professional {
-                    TextField(title, value: value, format: .number.precision(.fractionLength(2)))
-                        .textFieldStyle(.roundedBorder).frame(width: 65)
-                } else {
-                    Text(value.wrappedValue, format: .number.precision(.fractionLength(2)))
-                        .monospacedDigit().foregroundStyle(.secondary)
-                }
-            }
-            Slider(value: value, in: range)
+    private var microphoneSummary: String {
+        guard store.settings.recordMicrophone else { return "Off" }
+        guard let id = store.settings.microphoneDeviceID else { return "System default" }
+        return AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone], mediaType: .audio, position: .unspecified
+        ).devices.first(where: { $0.uniqueID == id })?.localizedName ?? "Unavailable"
+    }
+
+    private func sourceRow(_ title: String, detail: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(detail).foregroundStyle(.secondary).lineLimit(1)
         }
+        .font(.subheadline)
     }
 }

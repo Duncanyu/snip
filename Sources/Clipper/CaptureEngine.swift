@@ -275,6 +275,7 @@ private enum CaptureError: LocalizedError {
     case writer(String)
     case permission
     case microphonePermission
+    case microphoneUnavailable
     case noDisplay
     case audioCopy
     case pixelTransfer(OSStatus)
@@ -290,6 +291,7 @@ private enum CaptureError: LocalizedError {
         case .writer(let detail): "Could not save the clip: \(detail)"
         case .permission: "Allow Screen Recording in System Settings, then restart this app."
         case .microphonePermission: "Allow Microphone access for Snip in System Settings."
+        case .microphoneUnavailable: "The selected microphone is unavailable. Choose another microphone in Sources."
         case .noDisplay: "No display is available for capture."
         case .audioCopy: "Could not copy an audio sample."
         case .pixelTransfer(let code): "Could not resize a captured frame (\(code))."
@@ -590,6 +592,14 @@ final class CaptureEngine: ObservableObject {
                     status = "Microphone permission required"
                     throw CaptureError.microphonePermission
                 }
+                if let id = settings.microphoneDeviceID {
+                    let devices = AVCaptureDevice.DiscoverySession(
+                        deviceTypes: [.microphone], mediaType: .audio, position: .unspecified
+                    ).devices
+                    guard devices.contains(where: { $0.uniqueID == id }) else {
+                        throw CaptureError.microphoneUnavailable
+                    }
+                }
             }
             let content = try await SCShareableContent.current
             availableDisplays = content.displays
@@ -634,6 +644,8 @@ final class CaptureEngine: ObservableObject {
             configuration.showsCursor = true
             configuration.capturesAudio = settings.includeAudio && sharedAudioFilter
             configuration.captureMicrophone = settings.recordMicrophone
+            configuration.microphoneCaptureDeviceID = settings.recordMicrophone
+                ? settings.microphoneDeviceID : nil
             configuration.excludesCurrentProcessAudio = settings.excludeAppAudio
             configuration.sampleRate = 48_000
             configuration.channelCount = 2
