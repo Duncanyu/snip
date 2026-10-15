@@ -286,7 +286,6 @@ final class CaptureSettingsStore: ObservableObject {
             await CaptureEngine.shared.start(settings: settings)
             if !CaptureEngine.shared.isRunning { return false }
         }
-        NSApp.setActivationPolicy(.regular)
         return true
     }
 }
@@ -295,11 +294,11 @@ final class CaptureSettingsStore: ObservableObject {
 private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
+    private var controlsPopover: NSPopover?
     private var observers = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
-        NSApp.setActivationPolicy(.regular)
         observeState()
         updateStatusItem()
         GlobalHotkey.shared.install()
@@ -317,9 +316,15 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func observeState() {
-        CaptureEngine.shared.$isRunning.sink { [weak self] _ in self?.updateStatusItem() }.store(in: &observers)
-        CaptureEngine.shared.$status.sink { [weak self] _ in self?.updateStatusItem() }.store(in: &observers)
-        CaptureSettingsStore.shared.$settings.sink { [weak self] _ in self?.updateStatusItem() }.store(in: &observers)
+        CaptureEngine.shared.$isRunning.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updateStatusItem() }
+        }.store(in: &observers)
+        CaptureEngine.shared.$status.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updateStatusItem() }
+        }.store(in: &observers)
+        CaptureSettingsStore.shared.$settings.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updateStatusItem() }
+        }.store(in: &observers)
         let workspace = NSWorkspace.shared.notificationCenter
         workspace.publisher(for: NSWorkspace.didLaunchApplicationNotification)
             .merge(with: workspace.publisher(for: NSWorkspace.didTerminateApplicationNotification),
@@ -329,6 +334,9 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateStatusItem() {
+        let policy: NSApplication.ActivationPolicy =
+            CaptureSettingsStore.shared.settings.showInMenuBar ? .accessory : .regular
+        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
         guard CaptureSettingsStore.shared.settings.showInMenuBar else {
             if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
             statusItem = nil
@@ -340,62 +348,21 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = MenuBarIcon.menuBarImage(iconState)
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.target = self
-        statusItem.button?.action = #selector(showStatusMenu(_:))
+        statusItem.button?.action = #selector(showControls(_:))
         NSApp.applicationIconImage = MenuBarIcon.applicationImage(iconState)
-    }
-
-    private func makeStatusMenu() -> NSMenu {
-        let menu = NSMenu()
-        let engine = CaptureEngine.shared
-        let settings = CaptureSettingsStore.shared.settings
-        let status = menu.addItem(withTitle: engine.status, action: nil, keyEquivalent: "")
-        status.isEnabled = false
-        menu.addItem(.separator())
-        let save = menu.addItem(withTitle: "Save Last \(engine.activeSettings?.clipDuration ?? settings.clipDuration) Seconds", action: #selector(saveLastClip), keyEquivalent: "")
-        save.target = self
-        save.isEnabled = engine.isRunning
-        let capture = menu.addItem(withTitle: engine.isRunning ? "Pause Capture" : "Start Capture", action: #selector(toggleCapture), keyEquivalent: "")
-        capture.target = self
-        menu.addItem(.separator())
-        let folder = menu.addItem(withTitle: "Open Clips Folder", action: #selector(openClipsFolder), keyEquivalent: "")
-        folder.target = self
-        let preferences = menu.addItem(withTitle: "Settings…", action: #selector(openSettingsWindow), keyEquivalent: ",")
-        preferences.target = self
-        let permissions = menu.addItem(withTitle: "Open Screen Recording Settings", action: #selector(openScreenRecordingSettings), keyEquivalent: "")
-        permissions.target = self
-        menu.addItem(.separator())
-        let quit = menu.addItem(withTitle: "Quit Snip", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        return menu
-    }
-
-    @objc private func saveLastClip() {
-        Task { await CaptureEngine.shared.saveClip(seconds: CaptureEngine.shared.activeSettings?.clipDuration ?? CaptureSettingsStore.shared.settings.clipDuration) }
-    }
-
-    @objc private func toggleCapture() {
-        Task {
-            if CaptureEngine.shared.isRunning { await CaptureEngine.shared.stop() }
-            else { await CaptureEngine.shared.start(settings: CaptureSettingsStore.shared.settings) }
-        }
-    }
-
-    @objc private func openClipsFolder() {
-        let folder = URL(fileURLWithPath: CaptureSettingsStore.shared.settings.clipDirectoryPath, isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(folder)
     }
 
     @objc private func openSettingsWindow() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 820, height: 660),
-                styleMask: [.titled, .closable, .miniaturizable],
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 740),
+                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             window.identifier = NSUserInterfaceItemIdentifier("SnipSettings")
-            window.title = "Snip Settings"
+            window.title = "Snip"
+            window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: CaptureSettingsView())
             settingsWindow = window
@@ -405,16 +372,26 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    @objc private func showStatusMenu(_ sender: NSStatusBarButton) {
-        makeStatusMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+    @objc private func showControls(_ sender: NSStatusBarButton) {
+        if controlsPopover == nil {
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.contentSize = NSSize(width: 410, height: 590)
+            popover.contentViewController = NSHostingController(rootView: CompactControlsView(
+                openEditor: { [weak self] in
+                    self?.controlsPopover?.performClose(nil)
+                    self?.openSettingsWindow()
+                },
+                quit: { NSApp.terminate(nil) }
+            ))
+            controlsPopover = popover
+        }
+        if controlsPopover?.isShown == true {
+            controlsPopover?.performClose(nil)
+        } else {
+            controlsPopover?.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        }
     }
-
-    @objc private func openScreenRecordingSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    @objc private func quit() { NSApp.terminate(nil) }
 
 }
 
@@ -639,49 +616,144 @@ private func closeSettingsWindow() {
 private struct CaptureSettingsView: View {
     @ObservedObject private var engine = CaptureEngine.shared
     @ObservedObject private var store = CaptureSettingsStore.shared
+    @State private var page = 0
+    @State private var settingsPage = 0
+    @State private var professional = false
+
+    private let background = Color(red: 0.115, green: 0.12, blue: 0.17)
+    private let surface = Color(red: 0.15, green: 0.16, blue: 0.21)
+    private let accent = Color(red: 0.08, green: 0.48, blue: 0.98)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Snip Settings").font(.title2.bold())
-                    Text(engine.status).font(.caption)
-                        .foregroundStyle(engine.isRunning ? .green : .secondary)
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                Image(systemName: "display")
+                    .font(.system(size: 27)).foregroundStyle(accent)
+                    .frame(width: 42)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(page == 0 ? "Color controls" : "Settings").font(.title2.bold())
+                    Text(page == 0 ? "Adjust the recorded video" : "Capture preferences and tools")
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(draftSummary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    Text(store.settings.clipName + " → " + folderLabel)
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Button {
+                    page = 1 - page
+                } label: {
+                    Label(page == 0 ? "Settings" : "Controls",
+                          systemImage: page == 0 ? "gearshape" : "slider.horizontal.3")
+                }
+                .buttonStyle(.bordered).tint(surface).foregroundStyle(.primary)
+                Toggle("On", isOn: captureBinding).toggleStyle(.switch)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 24).padding(.top, 30).padding(.bottom, 16)
+
+            HStack(spacing: 12) {
+                Text("Display").font(.headline)
+                displayPicker
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            HStack(spacing: 7) {
+                Image(systemName: engine.isRunning ? "record.circle.fill" : "pause.circle.fill")
+                Text(engine.isRunning ? "Capture active" :
+                     (["Ready", "Stopped"].contains(engine.status) ? "Capture paused" : engine.status))
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 12)
+
+            if page == 0 {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Picker("Mode", selection: $professional) {
+                            Text("Beginner").tag(false)
+                            Text("Professional").tag(true)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 340)
+                        colorTab
+                    }
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Picker("Settings section", selection: $settingsPage) {
+                        Text("App").tag(0)
+                        Text("Video").tag(1)
+                        Text("Sources").tag(2)
+                        Text("Clips").tag(3)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 400)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    ScrollView {
+                        Group {
+                            switch settingsPage {
+                            case 0: appTab
+                            case 1: captureTab
+                            case 2: sourcesTab
+                            default: clipsTab
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
                 }
             }
-            TabView {
-                captureTab.tabItem { Label("Video", systemImage: "video") }
-                sourcesTab.tabItem { Label("Sources", systemImage: "square.stack.3d.up") }
-                colorTab.tabItem { Label("Color", systemImage: "slider.horizontal.3") }
-                clipsTab.tabItem { Label("Clips", systemImage: "film") }
-                appTab.tabItem { Label("App", systemImage: "gearshape") }
-            }
+            Spacer(minLength: 0)
             HStack {
                 if let sourceValidation {
                     Text(sourceValidation).foregroundStyle(.orange).font(.caption)
+                } else {
+                    Text("Color settings affect saved clips, not the display or backlight.")
+                        .foregroundStyle(.secondary).font(.caption)
                 }
                 Spacer()
-                Button("Apply and Close") {
-                    Task {
-                        if await store.apply() { closeSettingsWindow() }
-                    }
+                Button("Apply") { Task { _ = await store.apply() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(sourceValidation != nil)
+                Button("Done") {
+                    Task { if await store.apply() { closeSettingsWindow() } }
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
                 .disabled(sourceValidation != nil)
+                .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal, 24).padding(.vertical, 14)
         }
-        .padding(20)
-        .frame(width: 820, height: 660, alignment: .topLeading)
+        .frame(width: 600, height: 740)
+        .background(background)
+        .tint(accent)
+        .preferredColorScheme(.dark)
         .onAppear { bringSettingsToFront() }
         .task { await engine.refreshDisplays() }
         .onDisappear { GlobalHotkey.shared.cancelRecording() }
+    }
+
+    private var captureBinding: Binding<Bool> {
+        Binding(get: { engine.isRunning }, set: { enabled in
+            Task {
+                if enabled { await engine.start(settings: store.settings.normalized()) }
+                else { await engine.stop() }
+            }
+        })
+    }
+
+    private var displayPicker: some View {
+        Picker("Display", selection: $store.settings.displayID) {
+            Text("Main display").tag(Optional<CGDirectDisplayID>.none)
+            ForEach(engine.availableDisplays, id: \.displayID) { display in
+                Text(displayName(display.displayID)).tag(Optional(display.displayID))
+            }
+        }
+        .labelsHidden().pickerStyle(.menu)
+        .frame(width: 340, alignment: .leading).tint(.white)
+    }
+
+    private func displayName(_ id: CGDirectDisplayID) -> String {
+        let name = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == id
+        }?.localizedName ?? "Display \(id)"
+        return id == CGMainDisplayID() ? "\(name) · Main" : name
     }
 
     private var captureTab: some View {
@@ -758,29 +830,116 @@ private struct CaptureSettingsView: View {
     }
 
     private var colorTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GroupBox("Recorded video color") {
-                VStack(spacing: 7) {
-                    colorControl("Brightness", value: $store.settings.brightness, range: -0.25...0.25)
-                    colorControl("Contrast", value: $store.settings.contrast, range: 0.5...1.5)
-                    colorControl("Saturation", value: $store.settings.saturation, range: 0...2)
-                    HStack {
-                        Text("Neutral values keep the original capture colors.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Reset Color") {
-                            store.settings.brightness = 0
-                            store.settings.contrast = 1
-                            store.settings.saturation = 1
-                        }
-                        .disabled(!store.settings.hasColorEdit)
-                    }
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Quick looks").font(.headline)
+                HStack {
+                    quickLook("Neutral", brightness: 0, contrast: 1, saturation: 1)
+                    Spacer()
+                    quickLook("Bright", brightness: 0.1, contrast: 1, saturation: 1)
+                    Spacer()
+                    quickLook("Contrast", brightness: 0, contrast: 1.2, saturation: 1)
+                    Spacer()
+                    quickLook("Vivid", brightness: 0, contrast: 1.1, saturation: 1.35)
                 }
+                .padding(9).background(surface, in: RoundedRectangle(cornerRadius: 16))
             }
-            Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Preview for saved clips").font(.headline)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Tone levels").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        ForEach(0..<5) { index in
+                            VStack(spacing: 6) {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color(white: previewTone(Double(index) / 4)))
+                                    .frame(height: 42)
+                                    .overlay(RoundedRectangle(cornerRadius: 6)
+                                        .stroke(.white.opacity(0.13)))
+                                Text("\(index * 25)% input").font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Text("Color channels").font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary).padding(.top, 4)
+                    HStack(spacing: 10) {
+                        channelPreview("Red", color: .red)
+                        channelPreview("Green", color: .green)
+                        channelPreview("Blue", color: .blue)
+                    }
+                    Text("This preview approximates the color adjustment in a saved clip.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 16))
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Light and color").font(.headline)
+                VStack(spacing: 18) {
+                    colorSlider("Brightness", value: $store.settings.brightness,
+                                range: -0.25...0.25, neutral: 0)
+                    colorSlider("Contrast", value: $store.settings.contrast,
+                                range: 0.5...1.5, neutral: 1)
+                    colorSlider("Saturation", value: $store.settings.saturation,
+                                range: 0...2, neutral: 1)
+                }
+                .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 16))
+            }
+            Button("Reset color") { setColor(brightness: 0, contrast: 1, saturation: 1) }
+                .disabled(!store.settings.hasColorEdit)
         }
-        .padding(8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func quickLook(_ title: String, brightness: Double, contrast: Double,
+                           saturation: Double) -> some View {
+        Button(title) { setColor(brightness: brightness, contrast: contrast, saturation: saturation) }
+            .buttonStyle(.bordered).tint(surface).foregroundStyle(.primary)
+    }
+
+    private func setColor(brightness: Double, contrast: Double, saturation: Double) {
+        store.settings.brightness = brightness
+        store.settings.contrast = contrast
+        store.settings.saturation = saturation
+    }
+
+    private func previewTone(_ input: Double) -> Double {
+        min(max((input - 0.5) * store.settings.contrast + 0.5 + store.settings.brightness, 0), 1)
+    }
+
+    private func channelPreview(_ title: String, color: Color) -> some View {
+        VStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 6).fill(color).frame(height: 42)
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func colorSlider(_ title: String, value: Binding<Double>,
+                             range: ClosedRange<Double>, neutral: Double) -> some View {
+        VStack(spacing: 5) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Text("Default \(neutral, specifier: "%.2f")")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Slider(value: value, in: range)
+                if professional {
+                    TextField(title, value: value, format: .number.precision(.fractionLength(2)))
+                        .frame(width: 62).textFieldStyle(.roundedBorder)
+                } else {
+                    Text(value.wrappedValue, format: .number.precision(.fractionLength(2)))
+                        .monospacedDigit().frame(width: 44, alignment: .trailing)
+                }
+                Button { value.wrappedValue = neutral } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                }
+                .buttonStyle(.plain)
+                .disabled(abs(value.wrappedValue - neutral) < 0.001)
+                .accessibilityLabel("Reset \(title)")
+            }
+        }
     }
 
     private var sourcesTab: some View {
@@ -820,6 +979,13 @@ private struct CaptureSettingsView: View {
                         Text("Save to").font(.subheadline.weight(.semibold))
                         Text(folderLabel).foregroundStyle(.secondary).lineLimit(1)
                         Button("Choose…") { chooseFolder() }
+                        Button("Open folder") {
+                            let folder = URL(fileURLWithPath: store.settings.clipDirectoryPath,
+                                             isDirectory: true)
+                            try? FileManager.default.createDirectory(at: folder,
+                                                                     withIntermediateDirectories: true)
+                            NSWorkspace.shared.open(folder)
+                        }
                     }
                     HStack(spacing: 18) {
                         hotkeySetting("Save clip", label: store.settings.hotkeyLabel, action: .save)
@@ -839,19 +1005,50 @@ private struct CaptureSettingsView: View {
     }
 
     private var appTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GroupBox("Feedback") {
-                Toggle("Play a sound when a clip is saved", isOn: $store.settings.playSoundOnSave)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("App location").font(.headline)
+                HStack {
+                    Text("Show in")
+                    Picker("Show in", selection: $store.settings.showInMenuBar) {
+                        Text("Dock").tag(false)
+                        Text("Menu bar").tag(true)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 270)
+                }
+                .padding(8).background(surface, in: RoundedRectangle(cornerRadius: 14))
             }
-            GroupBox("Visibility") {
-                Toggle("Show in menu bar", isOn: $store.settings.showInMenuBar)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Keyboard shortcut").font(.headline)
+                hotkeySetting("Toggle capture", label: store.settings.pauseHotkeyLabel,
+                              action: .toggleCapture)
+                    .padding(12).background(surface, in: RoundedRectangle(cornerRadius: 14))
+                if let error = store.hotkeyError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                } else if store.isRecordingHotkey {
+                    Text("Press Escape to cancel.").font(.caption).foregroundStyle(.secondary)
+                }
             }
-            Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Displays").font(.headline)
+                HStack {
+                    Button("Refresh displays") { Task { await engine.refreshDisplays() } }
+                    Spacer()
+                    Button("Reset recorded color") {
+                        setColor(brightness: 0, contrast: 1, saturation: 1)
+                    }
+                    .disabled(!store.settings.hasColorEdit)
+                }
+                .padding(10).background(surface, in: RoundedRectangle(cornerRadius: 14))
+            }
+            Toggle("Play a sound when a clip is saved", isOn: $store.settings.playSoundOnSave)
+            Button("Open Screen Recording settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         }
-        .padding(8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var selectableApps: [SCRunningApplication] {
@@ -923,20 +1120,6 @@ private struct CaptureSettingsView: View {
         ids.wrappedValue.append(id)
     }
 
-    private var draftSummary: String {
-        let s = store.settings
-        let bitrate = s.bitrateMbps == 0 ? "Auto" : String(s.bitrateMbps) + " Mbps"
-        let audio = (s.includeAudio ? "Apps " + s.audioAppMode.title : "Apps off") +
-            (s.recordMicrophone ? ", mic on" : ", mic off")
-        let color = s.hasColorEdit ? "Color edited" : "Original color"
-        let resolution = s.resolution == .custom
-            ? String(s.customWidth) + "×" + String(s.customHeight)
-            : s.resolution.title
-        return resolution + " · " + String(s.fps) + " FPS · " + bitrate + " · " +
-            String(s.clipDuration) + "s · " + String(s.memoryLimitMB) + " MB\n" +
-            "Video: " + s.videoAppMode.title + " · Sound: " + audio + " · " + color
-    }
-
     private var qualitySelectionSummary: String {
         String(store.settings.fps) + " FPS · " + store.settings.resolution.title
     }
@@ -946,15 +1129,6 @@ private struct CaptureSettingsView: View {
         return NSScreen.screens.first {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == id
         }?.maximumFramesPerSecond
-    }
-
-    private func colorControl(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        HStack(spacing: 10) {
-            Text(title).frame(width: 85, alignment: .leading)
-            Slider(value: value, in: range)
-            Text(String(format: "%.2f", value.wrappedValue))
-                .monospacedDigit().frame(width: 42, alignment: .trailing)
-        }
     }
 
     private var folderLabel: String {
@@ -1013,5 +1187,103 @@ private struct CaptureSettingsView: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+@MainActor
+private struct CompactControlsView: View {
+    @ObservedObject private var engine = CaptureEngine.shared
+    @ObservedObject private var store = CaptureSettingsStore.shared
+    @State private var professional = false
+    let openEditor: () -> Void
+    let quit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Snip controls").font(.title3.bold())
+                Spacer()
+                Button(action: openEditor) { Image(systemName: "gearshape") }
+                    .buttonStyle(.plain).accessibilityLabel("Open settings")
+                Toggle("Capture", isOn: captureBinding).labelsHidden().toggleStyle(.switch)
+            }
+            HStack {
+                Text("Display").font(.headline)
+                Picker("Display", selection: $store.settings.displayID) {
+                    Text("Main display").tag(Optional<CGDirectDisplayID>.none)
+                    ForEach(engine.availableDisplays, id: \.displayID) { display in
+                        Text(display.displayID == CGMainDisplayID()
+                             ? "Main display" : "Display \(display.displayID)")
+                            .tag(Optional(display.displayID))
+                    }
+                }
+                .labelsHidden().pickerStyle(.menu)
+            }
+            Picker("Mode", selection: $professional) {
+                Text("Beginner").tag(false)
+                Text("Professional").tag(true)
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Preview for saved clips").font(.subheadline.weight(.semibold))
+                LinearGradient(colors: [.black, .gray, .white], startPoint: .leading, endPoint: .trailing)
+                    .frame(height: 25).clipShape(RoundedRectangle(cornerRadius: 5))
+                HStack {
+                    Text("Black"); Spacer(); Text("Midtone"); Spacer(); Text("White")
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            compactSlider("Brightness", value: $store.settings.brightness, range: -0.25...0.25)
+            compactSlider("Contrast", value: $store.settings.contrast, range: 0.5...1.5)
+            compactSlider("Saturation", value: $store.settings.saturation, range: 0...2)
+            HStack {
+                Button("Save last \(engine.activeSettings?.clipDuration ?? store.settings.clipDuration)s") {
+                    Task { await engine.saveClip(seconds: engine.activeSettings?.clipDuration
+                                                 ?? store.settings.clipDuration) }
+                }
+                .disabled(!engine.isRunning)
+                Spacer()
+                Button("Apply color") { Task { _ = await store.apply() } }
+            }
+            Divider()
+            HStack {
+                Button("Full editor", action: openEditor)
+                Spacer()
+                Button("Quit", action: quit)
+            }
+        }
+        .padding(18)
+        .frame(width: 410)
+        .background(Color(red: 0.17, green: 0.17, blue: 0.20))
+        .tint(Color(red: 0.08, green: 0.48, blue: 0.98))
+        .preferredColorScheme(.dark)
+        .task { await engine.refreshDisplays() }
+    }
+
+    private var captureBinding: Binding<Bool> {
+        Binding(get: { engine.isRunning }, set: { enabled in
+            Task {
+                if enabled { await engine.start(settings: store.settings.normalized()) }
+                else { await engine.stop() }
+            }
+        })
+    }
+
+    private func compactSlider(_ title: String, value: Binding<Double>,
+                               range: ClosedRange<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(.subheadline.weight(.semibold))
+                Spacer()
+                if professional {
+                    TextField(title, value: value, format: .number.precision(.fractionLength(2)))
+                        .textFieldStyle(.roundedBorder).frame(width: 65)
+                } else {
+                    Text(value.wrappedValue, format: .number.precision(.fractionLength(2)))
+                        .monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+            Slider(value: value, in: range)
+        }
     }
 }
