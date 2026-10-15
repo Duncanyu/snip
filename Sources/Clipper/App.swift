@@ -90,6 +90,7 @@ struct CaptureSettings: Codable, Equatable {
     var audioAppIDs: [String] = []
     var showInMenuBar = true
     var menuBarPreferenceInitialized = false
+    var automaticUpdates = true
     // Compatibility for settings data and older callers.
     var showInDock: Bool {
         get { showInMenuBar }
@@ -118,7 +119,7 @@ struct CaptureSettings: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case clipDuration, fps, resolution, memoryLimitMB, displayID, includeAudio, recordMicrophone, microphoneDeviceID, excludeAppAudio
         case videoAppMode, videoAppIDs, audioAppMode, audioAppIDs
-        case showInMenuBar, menuBarPreferenceInitialized
+        case showInMenuBar, menuBarPreferenceInitialized, automaticUpdates
         case customWidth, customHeight, bitrateMbps, brightness, contrast, saturation
         case clipName, clipDirectoryPath, playSoundOnSave, soundPreferenceInitialized
         case hotkeyKeyCode, hotkeyModifiers, hotkeyLabel
@@ -154,6 +155,7 @@ struct CaptureSettings: Codable, Equatable {
             }
         }
         menuBarPreferenceInitialized = try values.decodeIfPresent(Bool.self, forKey: .menuBarPreferenceInitialized) ?? false
+        automaticUpdates = try values.decodeIfPresent(Bool.self, forKey: .automaticUpdates) ?? true
         customWidth = try values.decodeIfPresent(Int.self, forKey: .customWidth) ?? customWidth
         customHeight = try values.decodeIfPresent(Int.self, forKey: .customHeight) ?? customHeight
         bitrateMbps = try values.decodeIfPresent(Int.self, forKey: .bitrateMbps) ?? bitrateMbps
@@ -255,10 +257,14 @@ final class CaptureSettingsStore: ObservableObject {
             if let data = try? JSONEncoder().encode(settings) {
                 UserDefaults.standard.set(data, forKey: Self.storageKey)
             }
+            if !isNormalizingSettings { scheduleApply() }
         }
     }
 
     private static let storageKey = "captureSettings"
+    private var applyTask: Task<Void, Never>?
+    private var isReady = false
+    private var isNormalizingSettings = false
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
@@ -279,23 +285,38 @@ final class CaptureSettingsStore: ObservableObject {
         } else {
             settings = CaptureSettings()
         }
+        isReady = true
     }
 
-    func apply() async -> Bool {
-        settings = settings.normalized()
+    func apply() async {
+        let normalized = settings.normalized()
+        if normalized != settings {
+            isNormalizingSettings = true
+            settings = normalized
+            isNormalizingSettings = false
+        }
         if CaptureEngine.shared.isRunning,
            let active = CaptureEngine.shared.activeSettings,
            settings.needsCaptureRestart(comparedTo: active) {
             await CaptureEngine.shared.stop()
             await CaptureEngine.shared.start(settings: settings)
-            if !CaptureEngine.shared.isRunning { return false }
         }
-        return true
+    }
+
+    private func scheduleApply() {
+        guard isReady else { return }
+        applyTask?.cancel()
+        applyTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            await self?.apply()
+        }
     }
 }
 
 @MainActor
 private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
+    private let updater = SnipUpdater()
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var controlsPopover: NSPopover?
@@ -329,6 +350,11 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
         CaptureSettingsStore.shared.$settings.sink { [weak self] _ in
             DispatchQueue.main.async { self?.updateStatusItem() }
         }.store(in: &observers)
+        CaptureSettingsStore.shared.$settings
+            .map(\.automaticUpdates)
+            .removeDuplicates()
+            .sink { [weak self] enabled in self?.updater.setEnabled(enabled) }
+            .store(in: &observers)
         let workspace = NSWorkspace.shared.notificationCenter
         workspace.publisher(for: NSWorkspace.didLaunchApplicationNotification)
             .merge(with: workspace.publisher(for: NSWorkspace.didTerminateApplicationNotification),
@@ -359,14 +385,14 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettingsWindow() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 600, height: 740),
-                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                contentRect: NSRect(x: 0, y: 0, width: 860, height: 660),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             window.identifier = NSUserInterfaceItemIdentifier("SnipSettings")
             window.title = "Snip"
-            window.titlebarAppearsTransparent = true
+            window.appearance = NSAppearance(named: .aqua)
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: CaptureSettingsView())
             settingsWindow = window
@@ -380,7 +406,7 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
         if controlsPopover == nil {
             let popover = NSPopover()
             popover.behavior = .transient
-            popover.contentSize = NSSize(width: 410, height: 590)
+            popover.contentSize = NSSize(width: 380, height: 450)
             popover.contentViewController = NSHostingController(rootView: CompactControlsView(
                 openEditor: { [weak self] in
                     self?.controlsPopover?.performClose(nil)
@@ -602,6 +628,23 @@ private enum MenuBarIcon {
     }
 }
 
+private struct SnipGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            configuration.label
+                .font(.headline)
+            configuration.content
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 15))
+        .overlay {
+            RoundedRectangle(cornerRadius: 15)
+                .strokeBorder(Color.primary.opacity(0.06))
+        }
+    }
+}
+
 @MainActor
 private func bringSettingsToFront() {
     NSApp.activate(ignoringOtherApps: true)
@@ -612,124 +655,80 @@ private func bringSettingsToFront() {
 }
 
 @MainActor
-private func closeSettingsWindow() {
-    NSApp.windows.first(where: { $0.identifier?.rawValue == "SnipSettings" })?.performClose(nil)
-}
-
-@MainActor
 private struct CaptureSettingsView: View {
     @ObservedObject private var engine = CaptureEngine.shared
     @ObservedObject private var store = CaptureSettingsStore.shared
-    @State private var page = 0
     @State private var settingsPage = 0
     @State private var microphoneRefresh = 0
 
-    private let background = Color(red: 0.115, green: 0.12, blue: 0.17)
-    private let surface = Color(red: 0.15, green: 0.16, blue: 0.21)
+    private let background = Color(nsColor: .windowBackgroundColor)
+    private let surface = Color.black.opacity(0.045)
     private let accent = Color(red: 0.08, green: 0.48, blue: 0.98)
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                Image(systemName: "record.circle")
-                    .font(.system(size: 27)).foregroundStyle(accent)
-                    .frame(width: 42)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(page == 0 ? "Snip recorder" : "Settings").font(.title2.bold())
-                    Text(page == 0 ? "Save the last moments of your screen" : "Capture preferences and sources")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    page = 1 - page
-                } label: {
-                    Label(page == 0 ? "Settings" : "Controls",
-                          systemImage: page == 0 ? "gearshape" : "slider.horizontal.3")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(surface, in: RoundedRectangle(cornerRadius: 9))
-                }
-                .buttonStyle(.plain)
-                Toggle("On", isOn: captureBinding).toggleStyle(.switch)
-                    .fixedSize()
+            TabView(selection: $settingsPage) {
+                dashboardTab
+                    .tabItem { Label("Dashboard", systemImage: "square.grid.2x2") }
+                    .tag(0)
+                ScrollView { advancedTab }
+                    .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
+                    .tag(1)
+                ScrollView { clipsTab }
+                    .tabItem { Label("Clips", systemImage: "film") }
+                    .tag(2)
+                ScrollView { appTab }
+                    .tabItem { Label("General", systemImage: "gearshape") }
+                    .tag(3)
             }
-            .padding(.horizontal, 24).padding(.top, 30).padding(.bottom, 16)
-
-            HStack(spacing: 12) {
-                Text("Display").font(.headline)
-                displayPicker
-                Spacer()
-            }
-            .padding(.horizontal, 24)
-            HStack(spacing: 7) {
-                Image(systemName: engine.isRunning ? "record.circle.fill" : "pause.circle.fill")
-                Text(engine.isRunning ? "Capture active" :
-                     (["Ready", "Stopped"].contains(engine.status) ? "Capture paused" : engine.status))
-            }
-            .font(.caption).foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 12)
-
-            if page == 0 {
-                ScrollView {
-                    recordingPage
-                    .padding(.horizontal, 24)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            } else {
-                VStack(spacing: 12) {
-                    Picker("Settings section", selection: $settingsPage) {
-                        Text("Sources").tag(0)
-                        Text("Video").tag(1)
-                        Text("Clips").tag(2)
-                        Text("Color").tag(3)
-                        Text("App").tag(4)
-                    }
-                    .pickerStyle(.segmented).labelsHidden().frame(width: 510)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 24)
-                    ScrollView {
-                        Group {
-                            switch settingsPage {
-                            case 0: sourcesTab
-                            case 1: captureTab
-                            case 2: clipsTab
-                            case 3: colorTab
-                            default: appTab
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                    }
-                }
-            }
-            Spacer(minLength: 0)
-            HStack {
-                if let sourceValidation {
-                    Text(sourceValidation).foregroundStyle(.orange).font(.caption)
-                } else {
-                    Text("\(store.settings.hotkeyLabel) saves the recent clip.")
-                        .foregroundStyle(.secondary).font(.caption)
-                }
-                Spacer()
-                Button("Apply") { Task { _ = await store.apply() } }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(sourceValidation != nil)
-                Button("Done") {
-                    Task { if await store.apply() { closeSettingsWindow() } }
-                }
-                .disabled(sourceValidation != nil)
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(.horizontal, 24).padding(.vertical, 14)
+            .padding(20)
         }
-        .frame(width: 600, height: 740)
+        .frame(minWidth: 760, minHeight: 580)
         .background(background)
         .tint(accent)
-        .preferredColorScheme(.dark)
+        .groupBoxStyle(SnipGroupBoxStyle())
+        .preferredColorScheme(.light)
         .onAppear { bringSettingsToFront() }
         .task { await engine.refreshDisplays() }
         .onDisappear { GlobalHotkey.shared.cancelRecording() }
+    }
+
+    private var dashboardTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Snip recorder").font(.largeTitle.bold())
+                    }
+                    Spacer()
+                    Toggle("On", isOn: captureBinding)
+                }
+                HStack {
+                    Label("Display", systemImage: "display")
+                        .font(.headline)
+                    displayPicker
+                    Spacer()
+                }
+                .padding(14).background(surface, in: RoundedRectangle(cornerRadius: 14))
+                HStack(spacing: 7) {
+                    Image(systemName: engine.isRunning ? "record.circle.fill" : "pause.circle.fill")
+                    Text(engine.isRunning ? "Capture active" :
+                         (["Ready", "Stopped"].contains(engine.status) ? "Capture paused" : engine.status))
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                recordingPage
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var advancedTab: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            captureTab
+            sourcesTab
+            colorTab
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var captureBinding: Binding<Bool> {
@@ -749,7 +748,7 @@ private struct CaptureSettingsView: View {
             }
         }
         .labelsHidden().pickerStyle(.menu)
-        .frame(width: 340, alignment: .leading).tint(.white)
+        .frame(width: 340, alignment: .leading).tint(accent)
     }
 
     private func displayName(_ id: CGDirectDisplayID) -> String {
@@ -763,9 +762,6 @@ private struct CaptureSettingsView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Recent clip").font(.headline)
-                Text(engine.isRunning ? "Snip is keeping the latest moments ready." :
-                     "Start capture to keep recent video ready to save.")
-                    .foregroundStyle(.secondary)
                 if engine.isRunning && !engine.captureDetails.isEmpty {
                     Text(engine.captureDetails).font(.caption).foregroundStyle(.secondary)
                 }
@@ -795,7 +791,7 @@ private struct CaptureSettingsView: View {
                 }
                 Text("\(store.settings.fps) FPS · \(store.settings.resolution.title)")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Video settings…") { page = 1; settingsPage = 1 }
+                Button("Video settings…") { settingsPage = 1 }
             }
             .padding(16).frame(maxWidth: .infinity, alignment: .leading)
             .background(surface, in: RoundedRectangle(cornerRadius: 16))
@@ -804,7 +800,7 @@ private struct CaptureSettingsView: View {
                 HStack {
                     Text("Sources").font(.headline)
                     Spacer()
-                    Button("Choose sources…") { page = 1; settingsPage = 0 }
+                Button("Choose sources…") { settingsPage = 1 }
                 }
                 sourceSummary("Video", detail: store.settings.videoAppMode.title)
                 sourceSummary("App audio", detail: store.settings.includeAudio
@@ -818,7 +814,7 @@ private struct CaptureSettingsView: View {
                 Text("Save location").font(.headline)
                 Text(folderLabel).font(.caption).foregroundStyle(.secondary)
                     .lineLimit(2).textSelection(.enabled)
-                Button("Clip settings…") { page = 1; settingsPage = 2 }
+                Button("Clip settings…") { settingsPage = 2 }
             }
             .padding(16).frame(maxWidth: .infinity, alignment: .leading)
             .background(surface, in: RoundedRectangle(cornerRadius: 16))
@@ -914,10 +910,9 @@ private struct CaptureSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Spacer()
         }
         .padding(8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var colorTab: some View {
@@ -1047,10 +1042,9 @@ private struct CaptureSettingsView: View {
                     }
                 }
             }
-            Spacer()
         }
         .padding(8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var appTab: some View {
@@ -1091,6 +1085,9 @@ private struct CaptureSettingsView: View {
                 .padding(10).background(surface, in: RoundedRectangle(cornerRadius: 14))
             }
             Toggle("Play a sound when a clip is saved", isOn: $store.settings.playSoundOnSave)
+            Toggle("Automatically update from GitHub", isOn: $store.settings.automaticUpdates)
+            Text("Checks daily and asks before installing.")
+                .font(.caption).foregroundStyle(.secondary)
             Button("Open Screen Recording settings") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                     NSWorkspace.shared.open(url)
@@ -1105,19 +1102,6 @@ private struct CaptureSettingsView: View {
         return engine.availableApplications
             .filter { !$0.bundleIdentifier.isEmpty && $0.bundleIdentifier != Bundle.main.bundleIdentifier && seen.insert($0.bundleIdentifier).inserted }
             .sorted { $0.applicationName.localizedCaseInsensitiveCompare($1.applicationName) == .orderedAscending }
-    }
-
-    private var sourceValidation: String? {
-        let s = store.settings
-        if s.videoAppMode == .only && s.videoAppIDs.isEmpty { return "Choose a video app to record." }
-        if s.includeAudio && s.audioAppMode == .only && s.audioAppIDs.isEmpty {
-            return "Choose an app whose sound to record."
-        }
-        if s.recordMicrophone, let id = s.microphoneDeviceID,
-           !microphoneDevices.contains(where: { $0.uniqueID == id }) {
-            return "Choose an available microphone."
-        }
-        return nil
     }
 
     private func sourceRule(_ title: String, mode: Binding<AppSourceMode>, ids: Binding<[String]>) -> some View {
@@ -1250,73 +1234,76 @@ private struct CompactControlsView: View {
     @ObservedObject private var store = CaptureSettingsStore.shared
     let openEditor: () -> Void
     let quit: () -> Void
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            HStack {
-                Text("Snip recorder").font(.title3.bold())
-                Spacer()
-                Button(action: openEditor) { Image(systemName: "gearshape") }
-                    .buttonStyle(.plain).accessibilityLabel("Open settings")
-                Toggle("Capture", isOn: captureBinding).labelsHidden().toggleStyle(.switch)
-            }
-            Text(engine.isRunning ? "Keeping recent video ready" : "Capture paused")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Text("Display").font(.headline)
-                Picker("Display", selection: $store.settings.displayID) {
-                    Text("Main display").tag(Optional<CGDirectDisplayID>.none)
-                    ForEach(engine.availableDisplays, id: \.displayID) { display in
-                        Text(display.displayID == CGMainDisplayID()
-                             ? "Main display" : "Display \(display.displayID)")
-                            .tag(Optional(display.displayID))
-                    }
-                }
-                .labelsHidden().pickerStyle(.menu)
-            }
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Recent clip").font(.headline)
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Length")
-                    TextField("Seconds", value: $store.settings.clipDuration, format: .number)
-                        .textFieldStyle(.roundedBorder).frame(width: 75)
-                    Text("seconds")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Snip recorder").font(.system(size: 17, weight: .bold))
+                        Text(engine.isRunning ? "Capture active" : "Capture paused")
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                    }
                     Spacer()
+                    Button(action: openEditor) { Image(systemName: "gearshape") }
+                        .buttonStyle(.borderless).help("Full settings")
+                    Toggle("Capture", isOn: captureBinding).labelsHidden()
                 }
-                Button("Save last \(engine.activeSettings?.clipDuration ?? store.settings.clipDuration) seconds") {
-                    Task { await engine.saveClip(seconds: engine.activeSettings?.clipDuration
-                                                 ?? store.settings.clipDuration) }
+                HStack(spacing: 8) {
+                    Text("Display").font(.callout.weight(.medium))
+                    Picker("Display", selection: $store.settings.displayID) {
+                        Text("Main display").tag(Optional<CGDirectDisplayID>.none)
+                        ForEach(engine.availableDisplays, id: \.displayID) { display in
+                            Text(display.displayID == CGMainDisplayID()
+                                 ? "Main display" : "Display \(display.displayID)")
+                                .tag(Optional(display.displayID))
+                        }
+                    }
+                    .labelsHidden().pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!engine.isRunning)
+                .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Recent clip").font(.headline)
+                    HStack(spacing: 8) {
+                        Text("Length")
+                        TextField("Seconds", value: $store.settings.clipDuration, format: .number)
+                            .textFieldStyle(.roundedBorder).frame(width: 72)
+                        Text("seconds").foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                    Button("Save last \(engine.activeSettings?.clipDuration ?? store.settings.clipDuration) seconds") {
+                        Task { await engine.saveClip(seconds: engine.activeSettings?.clipDuration
+                                                     ?? store.settings.clipDuration) }
+                    }
+                    .buttonStyle(.borderedProminent).disabled(!engine.isRunning)
+                }
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Sources").font(.headline)
+                    sourceRow("Video", detail: store.settings.videoAppMode.title)
+                    sourceRow("App audio", detail: store.settings.includeAudio
+                              ? store.settings.audioAppMode.title : "Off")
+                    sourceRow("Microphone", detail: microphoneSummary)
+                }
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+
+                Text(engine.status).font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary).lineLimit(2)
+                Divider()
+                HStack {
+                    Button("Full settings", action: openEditor)
+                    Spacer()
+                    Button("Quit", action: quit)
+                }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sources").font(.headline)
-                sourceRow("Video", detail: store.settings.videoAppMode.title)
-                sourceRow("App audio", detail: store.settings.includeAudio
-                          ? store.settings.audioAppMode.title : "Off")
-                sourceRow("Microphone", detail: microphoneSummary)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-            Text(engine.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            Divider()
-            HStack {
-                Button("Full editor", action: openEditor)
-                Spacer()
-                Button("Quit", action: quit)
-            }
+            .padding(16)
         }
-        .padding(18)
-        .frame(width: 410)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(.white.opacity(0.14)))
-        .tint(Color(red: 0.08, green: 0.48, blue: 0.98))
-        .preferredColorScheme(.dark)
+        .frame(width: 380, height: 450)
+        .tint(.blue)
         .task { await engine.refreshDisplays() }
     }
 
@@ -1343,6 +1330,6 @@ private struct CompactControlsView: View {
             Spacer()
             Text(detail).foregroundStyle(.secondary).lineLimit(1)
         }
-        .font(.subheadline)
+        .font(.callout)
     }
 }
