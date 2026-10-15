@@ -9,7 +9,7 @@
 Download **Snip-v0.2.0-macos-arm64.zip** from the [0.2.0 release](https://github.com/Duncanyu/snip/releases/tag/v0.2.0). It requires an Apple Silicon Mac running macOS 15 or later.
 
 1. Unzip the download and drag **Snip.app** into **Applications**.
-2. Open Snip from Applications. This build is ad hoc signed and is **not notarized**. If macOS blocks the first launch, try opening it once, then go to **System Settings → Privacy & Security → Open Anyway** and confirm. See [Apple's instructions](https://support.apple.com/en-us/102445). Only bypass this warning for a copy you downloaded from this repository.
+2. Open Snip from Applications. This build is ad hoc signed and is **not notarized**. On first run, if macOS blocks the app, open **System Settings → Privacy & Security → FileVault → Open Anyway** and confirm, then launch Snip again. See [Apple's instructions](https://support.apple.com/en-us/102445). Only bypass this warning for a copy you downloaded from this repository.
 3. Allow **Screen & System Audio Recording** when macOS asks. If you change this permission in System Settings, quit and reopen Snip.
 4. Snip appears in the menu bar. Click its icon for compact recording controls, or choose **Full editor** for sources, video, clip, color, and app settings. In **Settings → App**, you can place Snip in the Dock instead.
 
