@@ -645,8 +645,12 @@ private struct CaptureSettingsView: View {
                 } label: {
                     Label(page == 0 ? "Settings" : "Controls",
                           systemImage: page == 0 ? "gearshape" : "slider.horizontal.3")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(surface, in: RoundedRectangle(cornerRadius: 9))
                 }
-                .buttonStyle(.bordered).tint(surface).foregroundStyle(.primary)
+                .buttonStyle(.plain)
                 Toggle("On", isOn: captureBinding).toggleStyle(.switch)
                     .fixedSize()
             }
@@ -1010,7 +1014,16 @@ private struct CaptureSettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             GroupBox("Clip") {
                 VStack(alignment: .leading, spacing: 10) {
-                    setting("File name") { TextField("Clip", text: $store.settings.clipName) }
+                    setting("File name") {
+                        TextField("Clip or clip_{time}_{date}", text: $store.settings.clipName)
+                            .textFieldStyle(.roundedBorder)
+                        Text("Use {date} and {time} to place the recording date and time. A short ID keeps names unique.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Example: " + ClipExporter.fileName(template: store.settings.clipName,
+                                                                 at: Date(), suffix: "a1b2c3"))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     HStack {
                         Text("Save to").font(.subheadline.weight(.semibold))
                         Text(folderLabel).foregroundStyle(.secondary).lineLimit(1)
@@ -1113,7 +1126,8 @@ private struct CaptureSettingsView: View {
                 Picker("Capture", selection: mode) {
                     ForEach(AppSourceMode.allCases) { Text($0.title).tag($0) }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.segmented).labelsHidden()
+                .frame(maxWidth: .infinity)
                 if mode.wrappedValue != .all {
                     if ids.wrappedValue.isEmpty {
                         Text("No apps selected").font(.caption).foregroundStyle(.secondary)
@@ -1299,7 +1313,8 @@ private struct CompactControlsView: View {
         }
         .padding(18)
         .frame(width: 410)
-        .background(Color(red: 0.17, green: 0.17, blue: 0.20))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(.white.opacity(0.14)))
         .tint(Color(red: 0.08, green: 0.48, blue: 0.98))
         .preferredColorScheme(.dark)
         .task { await engine.refreshDisplays() }

@@ -769,17 +769,30 @@ final class CaptureEngine: ObservableObject {
     }
 }
 
-private enum ClipExporter {
+enum ClipExporter {
+    static func fileName(template: String, at date: Date, suffix: String) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        timeFormatter.dateFormat = "HH-mm-ss"
+        let hasToken = template.contains("{date}") || template.contains("{time}")
+        let expanded = template.replacingOccurrences(of: "{date}", with: dateFormatter.string(from: date))
+            .replacingOccurrences(of: "{time}", with: timeFormatter.string(from: date))
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+        let cleaned = String(expanded.unicodeScalars.filter { allowed.contains($0) }.prefix(80))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = cleaned.isEmpty ? "Clip" : cleaned
+        let timestamp = hasToken ? "" : " \(dateFormatter.string(from: date)) \(timeFormatter.string(from: date))"
+        return "\(base)\(timestamp) \(suffix).mov"
+    }
+
     static func export(_ clip: ClipSnapshot, name: String, directoryPath: String) async throws -> URL {
         let folder = URL(fileURLWithPath: directoryPath, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
-        let prefix = String(name.unicodeScalars.filter { allowed.contains($0) }.prefix(60))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let safeName = prefix.isEmpty ? "Clip" : prefix
-        let url = folder.appendingPathComponent("\(safeName) \(formatter.string(from: Date())) \(UUID().uuidString.prefix(6)).mov")
+        let url = folder.appendingPathComponent(fileName(template: name, at: Date(),
+                                                        suffix: String(UUID().uuidString.prefix(6))))
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         var completed = false
         defer {

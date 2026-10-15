@@ -126,6 +126,23 @@ final class RollingBufferTests: XCTestCase {
         XCTAssertEqual(edited.normalized().bitrateMbps, 0)
     }
 
+    func testClipNameTemplateExpandsTokensAndKeepsLegacyNames() {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH-mm-ss"
+        let time = formatter.string(from: date)
+        formatter.dateFormat = "yyyy-MM-dd"
+        let day = formatter.string(from: date)
+        XCTAssertEqual(ClipExporter.fileName(template: "clip_{time}_{date}", at: date,
+                                             suffix: "abc123"),
+                       "clip_\(time)_\(day) abc123.mov")
+        XCTAssertEqual(ClipExporter.fileName(template: "Clip", at: date, suffix: "abc123"),
+                       "Clip \(day) \(time) abc123.mov")
+        XCTAssertEqual(ClipExporter.fileName(template: "../", at: date, suffix: "abc123"),
+                       "Clip \(day) \(time) abc123.mov")
+    }
+
     func testMicrophoneMixProducesOneAudibleStereoSample() throws {
         let start = CMTime(seconds: 10, preferredTimescale: 48_000)
         let packet = try pcmSample(at: 10, bytes: 9_600)
