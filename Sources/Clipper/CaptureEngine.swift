@@ -146,7 +146,15 @@ final class RollingBuffer {
         if let newestVideo = video.last {
             let cutoff = newestVideo.time.seconds - seconds
             // Retain the last keyframe at or before the requested start time.
-            if let keep = video.indices.last(where: { video[$0].isKeyframe && video[$0].time.seconds <= cutoff }), keep > 0 {
+            var lower = 0
+            var upper = video.count
+            while lower < upper {
+                let middle = lower + (upper - lower) / 2
+                if video[middle].time.seconds <= cutoff { lower = middle + 1 }
+                else { upper = middle }
+            }
+            if lower > 0,
+               let keep = video[..<lower].lastIndex(where: \.isKeyframe), keep > 0 {
                 discardVideo(keep)
             }
         }
@@ -490,8 +498,8 @@ private final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate 
 
     private func reportFailure(_ error: Error) {
         failureLock.lock()
-        let shouldReport = !failureReported
-        failureReported = true
+        let shouldReport = !stopping && !failureReported
+        if shouldReport { failureReported = true }
         failureLock.unlock()
         if shouldReport { onFailure(error) }
     }
@@ -512,6 +520,7 @@ final class CaptureEngine: ObservableObject {
     static let shared = CaptureEngine()
 
     @Published private(set) var isRunning = false
+    @Published private(set) var hasError = false
     @Published private(set) var status = "Ready" {
         didSet { NSLog("Capture status: %@", status) }
     }
@@ -536,6 +545,7 @@ final class CaptureEngine: ObservableObject {
             availableDisplays = content.displays
             availableApplications = content.applications
         } catch {
+            hasError = true
             status = error.localizedDescription
         }
     }
@@ -567,6 +577,7 @@ final class CaptureEngine: ObservableObject {
                 }
             }
         } catch {
+            hasError = true
             status = error.localizedDescription
         }
     }
@@ -663,6 +674,7 @@ final class CaptureEngine: ObservableObject {
             }) { [weak self] error in
                 Task { @MainActor [weak self] in
                     await self?.stop()
+                    self?.hasError = true
                     self?.status = error.localizedDescription
                 }
             }
@@ -705,16 +717,22 @@ final class CaptureEngine: ObservableObject {
             self.audioStream = separateAudioStream
             activeSettings = settings
             isRunning = true
+            hasError = false
             status = "Recording"
         } catch {
             captureDetails = ""
+            hasError = true
             status = error.localizedDescription
         }
     }
 
+    private var isStopping = false
+
     func stop() async {
         if let startTask { await startTask.value }
-        guard let stream, let pipeline else { return }
+        guard !isStopping, let stream, let pipeline else { return }
+        isStopping = true
+        defer { isStopping = false }
         // ScreenCaptureKit reports a stop as a delegate error on some macOS versions.
         // Mark this stop first so that normal pause/resume stays in the idle state.
         pipeline.finish()
@@ -726,6 +744,7 @@ final class CaptureEngine: ObservableObject {
         activeSettings = nil
         captureDetails = ""
         isRunning = false
+        hasError = false
         status = "Stopped"
     }
 
@@ -764,6 +783,7 @@ final class CaptureEngine: ObservableObject {
                 clipSound?.play()
             }
         } catch {
+            hasError = true
             status = error.localizedDescription
         }
     }

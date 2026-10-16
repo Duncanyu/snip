@@ -3,6 +3,7 @@ set -euo pipefail
 
 root=${0:A:h:h}
 target="$root/dist/Snip.app"
+mkdir -p "$root/dist"
 staging=$(mktemp -d "$root/dist/.Snip.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 app="$staging/Snip.app"

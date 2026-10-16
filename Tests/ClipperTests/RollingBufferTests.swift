@@ -4,6 +4,27 @@ import XCTest
 @testable import Clipper
 
 final class RollingBufferTests: XCTestCase {
+    func testPausedCaptureUsesNormalIconUnlessThereIsAnError() {
+        XCTAssertEqual(MenuBarIcon.state(recording: false, hasError: false), .idle)
+        XCTAssertEqual(MenuBarIcon.state(recording: false, hasError: true), .warning)
+        XCTAssertEqual(MenuBarIcon.state(recording: true, hasError: true), .recording)
+    }
+
+    func testLongVideoBufferTrimsAtTheNearestEarlierKeyframe() throws {
+        let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        let buffer = RollingBuffer(seconds: 2, maxBytes: 1_000_000)
+        for index in 0..<600 {
+            let time = now - 10 + Double(index) / 60
+            buffer.addVideo(try sample(at: time, keyframe: index.isMultiple(of: 60)))
+        }
+
+        let clip = try buffer.snapshot(seconds: 2)
+        let first = try XCTUnwrap(clip.video.first)
+        XCTAssertTrue(first.isKeyframe)
+        XCTAssertLessThanOrEqual(first.time.seconds, now - 2)
+        XCTAssertGreaterThan(first.time.seconds, now - 3.1)
+    }
+
     func testFrequentAudioExpiryKeepsOnlyRecentSamples() throws {
         let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
         let buffer = RollingBuffer(seconds: 1, maxBytes: 100_000)

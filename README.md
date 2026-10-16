@@ -2,11 +2,11 @@
 
 Snip is a native macOS app that continuously keeps a short rolling screen recording. Press a shortcut to save the recent video as a `.mov` clip.
 
-**[Download Snip 0.3.0](https://github.com/Duncanyu/snip/releases/tag/v0.3.0)** · [Install](#install) · [Use Snip](#use-snip) · [Build](#build-from-source)
+**[Download Snip 0.3.1](https://github.com/Duncanyu/snip/releases/tag/v0.3.1)** · [Install](#install) · [Use Snip](#use-snip) · [Build](#build-from-source)
 
 ## Install
 
-Download `Snip-v0.3.0-macos-arm64.zip` from the [0.3.0 release](https://github.com/Duncanyu/snip/releases/tag/v0.3.0), unzip it, and move **Snip.app** to **Applications**. Snip requires an Apple Silicon Mac running macOS 15 or later.
+Download `Snip-v0.3.1-macos-arm64.zip` from the [0.3.1 release](https://github.com/Duncanyu/snip/releases/tag/v0.3.1), unzip it, and move **Snip.app** to **Applications**. Snip requires an Apple Silicon Mac running macOS 15 or later.
 
 The app is ad hoc signed and is not notarized. If macOS blocks it on first run, open **System Settings → Privacy & Security → FileVault → Open Anyway**, confirm, then open Snip again. See [Apple's instructions](https://support.apple.com/en-us/102445). Only bypass this warning for a copy downloaded from this repository.
 
@@ -15,7 +15,7 @@ Snip asks for Screen Recording permission when it starts. Enable microphone reco
 The release includes a SHA-256 checksum. To verify the download, put the checksum file beside the ZIP and run:
 
 ```sh
-shasum -a 256 -c Snip-v0.3.0-macos-arm64.zip.sha256
+shasum -a 256 -c Snip-v0.3.1-macos-arm64.zip.sha256
 ```
 
 ## Use Snip
@@ -28,10 +28,11 @@ shasum -a 256 -c Snip-v0.3.0-macos-arm64.zip.sha256
 - **Advanced → Recorded video color** has optional brightness, contrast, and saturation adjustments for saved clips. Neutral values preserve the original capture colors.
 - In **General**, choose whether Snip appears in the Dock or menu bar, manage shortcuts and save sound, and enable or disable automatic updates. Updates are checked daily; Snip asks before installing and verifies the downloaded checksum.
 - Settings save and apply as you change them. Changes to active capture settings briefly restart capture.
+- The menu bar icon reflects capture and actual capture errors; save-status messages do not change it.
 
 ## Performance
 
-On an Apple M4 with 16 GiB RAM, macOS 27.0.1, Retina output (2940 × 1912), a 16 Mbps target, system audio, and a 60 Hz display, measured median CPU use ranged from 0% while paused to 4.1% during a moving window capture. The rolling buffer is compressed with HEVC; saved audio uses AAC at 48 kHz.
+On an Apple M4 with 16 GiB RAM, macOS 27.0.1, Retina output (2940 × 1912), a 16 Mbps target, system audio, and a 60 Hz display, measured median CPU use ranged from 0% while paused to 4.1% during a moving window capture. The rolling buffer is compressed with HEVC; saved audio uses AAC at 48 kHz. Buffer cleanup uses a binary search to find old frames, keeping the trim work small as the recording history grows.
 
 These are individual desktop observations, not a game frame-time benchmark or a measure of perceptual fidelity. See the [measurement report](benchmarks/2026-10-13-m4.md), [raw samples](benchmarks/raw/), [measurement script](scripts/benchmark.py), and [moving test scene](scripts/benchmark-scene.swift) for methods and limits.
 

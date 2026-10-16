@@ -344,7 +344,7 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
         CaptureEngine.shared.$isRunning.sink { [weak self] _ in
             DispatchQueue.main.async { self?.updateStatusItem() }
         }.store(in: &observers)
-        CaptureEngine.shared.$status.sink { [weak self] _ in
+        CaptureEngine.shared.$hasError.sink { [weak self] _ in
             DispatchQueue.main.async { self?.updateStatusItem() }
         }.store(in: &observers)
         CaptureSettingsStore.shared.$settings.sink { [weak self] _ in
@@ -374,7 +374,8 @@ private final class CaptureAppDelegate: NSObject, NSApplicationDelegate {
         }
         if statusItem == nil { statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength) }
         guard let statusItem else { return }
-        let iconState = MenuBarIcon.state(recording: CaptureEngine.shared.isRunning, status: CaptureEngine.shared.status)
+        let iconState = MenuBarIcon.state(recording: CaptureEngine.shared.isRunning,
+                                          hasError: CaptureEngine.shared.hasError)
         statusItem.button?.image = MenuBarIcon.menuBarImage(iconState)
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.target = self
@@ -605,13 +606,12 @@ struct SnipApp: App {
     }
 }
 
-private enum MenuBarIcon {
+enum MenuBarIcon {
     enum State: String { case idle, recording, warning }
 
-    static func state(recording: Bool, status: String) -> State {
+    static func state(recording: Bool, hasError: Bool) -> State {
         if recording { return .recording }
-        if status == "Ready" || status == "Stopped" { return .idle }
-        return .warning
+        return hasError ? .warning : .idle
     }
 
     static func menuBarImage(_ state: State) -> NSImage {
